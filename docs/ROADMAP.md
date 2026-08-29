@@ -57,7 +57,24 @@
 
 ---
 
-## PHASE 1b — Database & Authentication (M)
+## PHASE 2 — Database Foundation ✅ (current)
+
+| # | Task | Status |
+|---|---|---|
+| 2.1 | Schema reviewed & aligned to the 31-table contract: renames (`resources`, `units`, `inventory`, `leaderboards`, `events`, `audit_logs`), new `admin_users`; `UnitType→Unit` model rename + `unitTypeId→unitId` | ✅ |
+| 2.2 | Relation hygiene across all models: explicit FKs (FKs, indexes, unique constraints, cascade rules, timestamps) — Cascade for owned data, Restrict for history/catalogs, SetNull for soft refs; `updatedAt` on every mutable table | ✅ |
+| 2.3 | Baseline migration committed (`prisma/migrations/…_baseline`); `db:migrate`, `db:migrate:deploy` scripts; `db:push` removed (migrate is canonical) | ✅ |
+| 2.4 | Data-driven content config: `src/lib/game/config/` (6 units w/ counter triangle, 4 technologies, 5 quests, 4 achievements, 4 items, starter kit, Season 1) | ✅ |
+| 2.5 | Idempotent seed pipeline (`db:seed` + `prisma.seed`): catalogs, season, dev admin, 2 dev players | ✅ |
+| 2.6 | Transactional player bootstrap service (`bootstrapPlayer`): player+wallet+ledger+city+17 buildings+army+quests+notification in ONE tx — reused by auth in the next phase | ✅ |
+| 2.7 | `db:verify` invariant checker: ledger Σdelta==wallet + balanceAfter chain, per-player completeness, config reference integrity, coord uniqueness | ✅ |
+| 2.8 | 20 new config-invariant unit tests (45 total), seed idempotency proven (2nd run = 0 duplicates) | ✅ |
+
+**Acceptance evidence:** migrate+generate ✓ · db:seed ✓ (idempotent) · db:verify ✓ ledger reconciles exactly · tsc/lint/build/test green.
+
+---
+
+## PROPOSED NEXT — Authentication & Player Bootstrap (M) *(phase number awaits user assignment)*
 
 **Goal: a Telegram user opens the app and becomes a persisted, session-backed player.**
 

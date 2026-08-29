@@ -231,3 +231,74 @@ Concurrency on SQLite dev = serialized writers (acceptable for sandbox); Postgre
 2. Add Prisma `enum` blocks (optional polish) — app-layer validation already guards values.
 3. `prisma migrate deploy` (initial baseline migration generated in Phase 1).
 4. Enable row-level security ONLY if exposing Supabase directly — we do not; all access flows through the API.
+
+---
+
+## IMPLEMENTED — Phase 2 status (schema is migrated & seeded)
+
+**Migration policy.** Sandbox dev runs SQLite; migrations are committed under
+`prisma/migrations/` (baseline: `20260829175821_baseline`). At deploy time the
+datasource provider flips to `postgresql` and a fresh PG baseline is cut
+(`prisma migrate dev --name baseline` against the Supabase URL) — the schema is
+written PG-first (no SQLite-specific behavior; enum-likes are app-enforced
+strings, money is BigInt, JSON columns are PG `jsonb`-ready).
+
+**Table-name contract (user-facing list ↔ Prisma model):**
+
+| Table | Prisma model | Notes |
+|---|---|---|
+| users | `User` | Telegram identity, ban state, role |
+| players | `Player` | progression + premium/action currencies |
+| cities | `City` | unique (x,y) capital |
+| buildings | `Building` | unique (cityId,type); timer columns for lazy-tick upgrades |
+| resources | `ResourceWallet` | per-player balance cache — ledger is the truth |
+| resource_transactions | `ResourceTransaction` | immutable ledger, balanceAfter chain |
+| units | `Unit` | catalog (seeded from `src/lib/game/config/units.ts`) |
+| player_units | `PlayerUnit` | unique (playerId, unitId) stacks |
+| commanders | `Commander` | catalog |
+| items | `Item` | catalog |
+| inventory | `InventoryItem` | unique (playerId, itemId) |
+| technologies | `Technology` | catalog with JSON prerequisites |
+| player_technologies | `PlayerTechnology` | unique (playerId, technologyId) |
+| territories | `Territory` | unique (x,y), optional owner (SetNull) |
+| battles | `Battle` | deterministic (seed, configVersion); attacker Restrict |
+| battle_rounds | `BattleRound` | unique (battleId, roundNumber, side) |
+| battle_logs | `BattleLog` | per-participant rendered reports |
+| quests | `Quest` | catalog; JSON objective + reward |
+| player_quests | `PlayerQuest` | repeating quests → new rows (no unique) |
+| achievements | `Achievement` | catalog |
+| clans | `Clan` | unique name + tag; denormalized memberCount (in-tx) |
+| clan_members | `ClanMember` | unique playerId (≤1 clan per player) |
+| clan_wars | `ClanWar` | attacker/defender Restrict, winner SetNull |
+| market_orders | `MarketOrder` | escrow handled in service txs |
+| market_transactions | `MarketTransaction` | immutable trade history (Restrict FKs) |
+| seasons | `Season` | unique number; status index |
+| leaderboards | `Leaderboard` | materialized ranking rows (was leaderboard_snapshots) |
+| notifications | `Notification` | outbox: IN_APP + BOT delivery |
+| events | `GameEvent` | server-driven events (was game_events) |
+| admin_users | `AdminUser` | explicit admin registry (identity stays on User) |
+| audit_logs | `AuditLog` | append-only admin audit (was admin_audit_logs) |
+
+Support tables beyond the contract: `training_queue_items`, `player_commanders`,
+`commander_equipment`, `scout_reports`, `clan_invitations`, `clan_messages`,
+`clan_war_participations`, `world_bosses`, `world_boss_damages`, `announcements`,
+`diplomacy_relations` (post-MVP), `spy_missions` (post-MVP), `idempotency_keys`.
+
+**Cascade policy (enforced in schema):** owned instance data → `Cascade`;
+historical/ledger records → `Restrict`; catalog FKs → `Restrict` (catalogs are
+soft-disabled via `isActive`); optional soft references → `SetNull`. Every
+mutable table carries `updatedAt` (`@updatedAt`); append-only tables carry
+`createdAt` only.
+
+**Seeded transaction pattern (sensitive operations).** `bootstrapPlayer(tx, …)`
+(`src/lib/game/services/player-bootstrap.service.ts`) creates the complete
+player state — player, wallet, ledger faucet rows, city, 17 starter buildings,
+starter army, starter quests, welcome notification — inside ONE
+`db.$transaction`. It is consumed by the seed today and by auth signup next.
+All future money-touching services follow the same interactive-transaction
+pattern with ledger appends and `balanceAfter` chain inside the tx boundary.
+
+**Verification.** `bun run db:verify` asserts on the real database: ledger
+Σdelta == wallet per resource, `balanceAfter` chain consistency, per-player
+completeness, in-DB config reference integrity, coordinate uniqueness.
+`bun run test` guards the config catalogs before they can reach the DB.

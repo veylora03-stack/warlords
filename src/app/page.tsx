@@ -17,34 +17,48 @@ interface PhaseRow {
 
 const PHASES: PhaseRow[] = [
   { id: '00', name: 'Architecture & Planning', state: 'done' },
-  { id: '01a', name: 'Project Foundation (tooling · config · logging · tests)', state: 'done' },
-  { id: '01b', name: 'Database & Authentication', state: 'next' },
-  { id: '02', name: 'Player, Resources & Economy Core', state: 'planned' },
-  { id: '03', name: 'City & Buildings', state: 'planned' },
-  { id: '04', name: 'Army & Training', state: 'planned' },
-  { id: '05', name: 'Battle Engine', state: 'planned' },
-  { id: '06', name: 'Quests, Ranking & World', state: 'planned' },
-  { id: '07', name: 'Telegram Bot', state: 'planned' },
-  { id: '08', name: 'Mini App UI (full client)', state: 'planned' },
-  { id: '09', name: 'Admin Panel', state: 'planned' },
-  { id: '10', name: 'Security Hardening & Test Pass', state: 'planned' },
-  { id: '11', name: 'Deployment Preparation', state: 'planned' },
-  { id: '12', name: 'Load Testing', state: 'planned' },
-  { id: '13', name: 'Polish & Balance', state: 'planned' },
+  { id: '01', name: 'Project Foundation (tooling · config · logging · tests)', state: 'done' },
+  {
+    id: '02',
+    name: 'Database Foundation (31-table schema · migration · seeds · tx bootstrap)',
+    state: 'done',
+  },
+  { id: '03?', name: 'Authentication & Player Bootstrap (proposed)', state: 'next' },
+  { id: '—', name: 'Player, Resources & Economy Core', state: 'planned' },
+  { id: '—', name: 'City & Buildings', state: 'planned' },
+  { id: '—', name: 'Army & Training', state: 'planned' },
+  { id: '—', name: 'Battle Engine', state: 'planned' },
+  { id: '—', name: 'Quests, Ranking & World', state: 'planned' },
+  { id: '—', name: 'Telegram Bot', state: 'planned' },
+  { id: '—', name: 'Mini App UI (full client)', state: 'planned' },
+  { id: '—', name: 'Admin Panel', state: 'planned' },
+  { id: '—', name: 'Security Hardening & Deployment', state: 'planned' },
 ]
 
 const DELIVERABLES = [
-  { label: 'Env config layer (Zod-validated, fail-fast)', file: 'src/config/env.ts' },
-  { label: 'Structured JSON logger (levels · redaction)', file: 'src/lib/logger/' },
   {
-    label: 'Route factory (Zod → envelope) + request logging',
-    file: 'src/lib/api/route-handler.ts',
+    label: '31-table contract schema (FKs · indexes · cascades · timestamps)',
+    file: 'prisma/schema.prisma',
   },
-  { label: 'Health module (service/types/barrel pattern)', file: 'src/lib/health/' },
-  { label: 'Frontend providers (TanStack Query) + feature slice', file: 'src/features/system/' },
-  { label: 'UI state store (Zustand)', file: 'src/stores/ui.store.ts' },
-  { label: 'Unit tests (bun test) + e2e API smoke', file: 'tests/' },
-  { label: 'Formatter + import-boundary lint rules', file: '.prettierrc.json' },
+  { label: 'Baseline migration (applied, committed)', file: 'prisma/migrations/' },
+  {
+    label: 'Data-driven balance config (units · techs · quests · items)',
+    file: 'src/lib/game/config/',
+  },
+  {
+    label: 'Transactional player bootstrap (one tx, zero partial state)',
+    file: 'src/lib/game/services/',
+  },
+  { label: 'Idempotent dev seed (catalogs · season · admin · 2 players)', file: 'prisma/seed.ts' },
+  {
+    label: 'Invariant verifier (ledger ⇔ wallet exact reconciliation)',
+    file: 'scripts/db-verify.ts',
+  },
+  { label: 'Config invariant unit tests (45 total green)', file: 'tests/unit/config.test.ts' },
+  {
+    label: 'Env config layer + structured logger (Phase 1, standing)',
+    file: 'src/config/ · src/lib/logger/',
+  },
 ]
 
 const STACK = [
@@ -105,7 +119,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 1A COMPLETE
+                PHASE 2 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -244,7 +258,7 @@ export default function WarlordsConsole() {
           <CardContent>
             <ol className="divide-y divide-zinc-800/70">
               {PHASES.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-3 py-2.5">
+                <li key={p.name} className="flex items-center justify-between gap-3 py-2.5">
                   <div className="flex min-w-0 items-center gap-3">
                     <span
                       className={`w-9 shrink-0 text-right font-mono text-sm font-bold ${
@@ -276,7 +290,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 1a — Foundation Deliverables
+              Phase 2 — Database Foundation Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -291,10 +305,11 @@ export default function WarlordsConsole() {
             ))}
             <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="text-xs text-zinc-300">
-                Quality gate — build · lint · typecheck · unit + e2e tests all green
+                Quality gate — migrate · generate · build · lint · typecheck · 45 unit + 3 e2e tests
+                · ledger reconciles exactly
               </span>
               <code className="shrink-0 font-mono text-[10px] text-amber-400">
-                bun test ✓ tsc ✓ eslint ✓
+                db:seed ✓ db:verify ✓ tsc ✓ eslint ✓
               </code>
             </div>
           </CardContent>
@@ -305,7 +320,7 @@ export default function WarlordsConsole() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
           <span>
-            WARLORDS Dev Console · Phase 1a · awaiting approval for Phase 1b (Database & Auth)
+            WARLORDS Dev Console · Phase 2 · awaiting approval for Phase 3 (Auth & Player Bootstrap)
           </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>

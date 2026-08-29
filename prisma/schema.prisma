@@ -1,12 +1,28 @@
 // ============================================================================
-// WARLORDS — Prisma Schema (Phase 0 design baseline)
+// WARLORDS — Prisma Schema (Phase 2: database foundation — migrated baseline)
 // ----------------------------------------------------------------------------
 // Dev driver: SQLite (sandbox). Production target: PostgreSQL (Supabase).
 // The schema is PG-compatible: no connector-specific behavior; enum-like values
 // are enforced at the application layer (Zod + TS unions) because Prisma enums
-// are not supported on SQLite.
+// are not supported on SQLite. At deploy time: flip datasource provider to
+// "postgresql" and cut a fresh PG baseline (docs/DATABASE_DESIGN.md §migrations).
 // Money/resources/power/HP use BigInt (64-bit) — see docs/ARCHITECTURE.md §4.4.
 // Percentages/ratios are basis points (integers).
+//
+// Table-name contract (Phase 2): users, players, cities, buildings, resources,
+// resource_transactions, units, player_units, commanders, items, inventory,
+// technologies, player_technologies, territories, battles, battle_rounds,
+// battle_logs, quests, player_quests, achievements, clans, clan_members,
+// clan_wars, market_orders, market_transactions, seasons, leaderboards,
+// notifications, events, admin_users, audit_logs (+ support tables).
+//
+// Relation policy:
+//  - owned instance data (units, quests, buildings, notifications…) → Cascade
+//  - historical/ledger records (battles, market txs, audit logs)     → Restrict
+//  - catalog FKs (unit/item/tech/quest/commander/achievement)        → Restrict
+//    (catalogs are soft-disabled via isActive, never hard-deleted)
+//  - optional soft references                                        → SetNull
+//  - append-only tables carry createdAt only; mutable tables carry both timestamps
 // ============================================================================
 
 generator client {
@@ -38,8 +54,9 @@ model User {
   updatedAt    DateTime  @updatedAt
 
   player        Player?
-  auditLogs     AdminAuditLog[] @relation("AuditActor")
+  auditLogs     AuditLog[] @relation("AuditActor")
   announcements Announcement[]
+  adminRecord   AdminUser?
 
   @@map("users")
 }
@@ -96,7 +113,7 @@ model Player {
   marketOrders          MarketOrder[]
   marketPurchases       MarketTransaction[] @relation("MarketBuyer")
   marketSales           MarketTransaction[] @relation("MarketSeller")
-  leaderboardSnapshots  LeaderboardSnapshot[]
+  leaderboardSnapshots  Leaderboard[]
   bossDamages           WorldBossDamage[]
   warParticipations     ClanWarParticipation[]
   targetedEvents        GameEvent[]         @relation("EventTarget")
@@ -123,7 +140,7 @@ model ResourceWallet {
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  @@map("resource_wallets")
+  @@map("resources")
 }
 
 /// Immutable ledger — every economic delta appends here. Wallets are the cache; this is the truth.
@@ -187,55 +204,61 @@ model Building {
 // ─────────────────────────────────────────────────────────────────── ARMY ───
 
 /// Catalog (seeded from src/lib/game/config). Balance changes never touch this schema.
-model UnitType {
-  id            String @id // slug, e.g. "swordsman"
+model Unit {
+  id            String  @id // slug, e.g. "swordsman"
   name          String
   class         String // INFANTRY|RANGED|CAVALRY|SIEGE
-  tier          Int    @default(1)
+  tier          Int     @default(1)
   attack        Int
   defense       Int
   health        Int
   speed         Int
   foodUpkeep    Int // food consumed per hour per unit
-  carryCapacity Int    @default(0) // loot capacity
-  trainingCost  Json // { GOLD: 100, FOOD: 50, IRON: 20 } (basis-point-free, absolute)
+  carryCapacity Int     @default(0) // loot capacity
+  trainingCost  Json // { GOLD: 100, FOOD: 50, IRON: 20 } (absolute amounts)
   trainingTimeSec Int
-  strongAgainst Json? // [{ unitTypeId, bonusBps }] — data-driven counters
-  weakAgainst   Json? // [{ unitTypeId, penaltyBps }]
+  strongAgainst Json? // [{ unitId, bonusBps }] — data-driven counters
+  weakAgainst   Json? // [{ unitId, penaltyBps }]
   description   String?
   isActive      Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  playerUnits       PlayerUnit[]
-  trainingQueues    TrainingQueueItem[]
+  playerUnits    PlayerUnit[]
+  trainingQueues TrainingQueueItem[]
 
-  @@map("unit_types")
+  @@index([class, tier])
+  @@map("units")
 }
 
 model PlayerUnit {
-  id         String @id @default(cuid())
-  playerId   String
-  unitTypeId String
-  count      Int    @default(0)
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(cuid())
+  playerId  String
+  unitId    String
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
 
-  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  unitType UnitType @relation(fields: [unitTypeId], references: [id])
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
-  @@unique([playerId, unitTypeId])
+  @@unique([playerId, unitId])
+  @@index([unitId])
   @@map("player_units")
 }
 
 model TrainingQueueItem {
   id          String   @id @default(cuid())
   playerId    String
-  unitTypeId  String
+  unitId      String
   count       Int
   startedAt   DateTime @default(now())
   completesAt DateTime
   status      String   @default("TRAINING") // TRAINING|DONE|CANCELLED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  unitType UnitType @relation(fields: [unitTypeId], references: [id])
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
   @@index([playerId, completesAt])
   @@map("training_queue_items")
@@ -255,14 +278,16 @@ model March {
   status         String   @default("EN_ROUTE") // EN_ROUTE|RESOLVING|RETURNING|ARRIVED|CANCELLED
   battleId       String?  @unique
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   player       Player      @relation("MarchOwner", fields: [playerId], references: [id], onDelete: Cascade)
-  targetPlayer Player?     @relation("MarchTarget", fields: [targetPlayerId], references: [id])
-  territory    Territory?  @relation(fields: [territoryId], references: [id])
-  battle       Battle?     @relation(fields: [battleId], references: [id])
+  targetPlayer Player?     @relation("MarchTarget", fields: [targetPlayerId], references: [id], onDelete: SetNull)
+  territory    Territory?  @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  battle       Battle?     @relation(fields: [battleId], references: [id], onDelete: SetNull)
 
   @@index([arrivesAt, status])
   @@index([playerId, status])
+  @@index([territoryId])
   @@map("marches")
 }
 
@@ -278,6 +303,8 @@ model Commander {
   passive      Json // passive bonuses (basis points)
   lore         String?
   isActive     Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   playerCommanders PlayerCommander[]
 
@@ -293,7 +320,7 @@ model PlayerCommander {
   unlockedAt  DateTime @default(now())
 
   player    Player               @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  commander Commander            @relation(fields: [commanderId], references: [id])
+  commander Commander            @relation(fields: [commanderId], references: [id], onDelete: Restrict)
   equipment CommanderEquipment[]
 
   @@unique([playerId, commanderId])
@@ -313,6 +340,8 @@ model Item {
   basePrice   BigInt?
   description String?
   isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   inventoryItems InventoryItem[]
   equipmentBinds CommanderEquipment[]
@@ -329,21 +358,23 @@ model InventoryItem {
   updatedAt DateTime @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  item   Item   @relation(fields: [itemId], references: [id])
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Restrict)
 
   @@unique([playerId, itemId])
-  @@map("inventory_items")
+  @@map("inventory")
 }
 
 /// Slot-bound equipment on a commander instance.
 model CommanderEquipment {
-  id                 String @id @default(cuid())
+  id                 String   @id @default(cuid())
   playerCommanderId  String
   slot               String // WEAPON|ARMOR|HELMET|RING|AMULET
   itemId             String
+  equippedAt         DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   playerCommander PlayerCommander @relation(fields: [playerCommanderId], references: [id], onDelete: Cascade)
-  item            Item            @relation(fields: [itemId], references: [id])
+  item            Item            @relation(fields: [itemId], references: [id], onDelete: Restrict)
 
   @@unique([playerCommanderId, slot])
   @@map("commander_equipment")
@@ -364,9 +395,12 @@ model Technology {
   researchTimeSecPerLevel Int
   description            String?
   isActive               Boolean @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   playerTechnologies PlayerTechnology[]
 
+  @@index([branch, tier])
   @@map("technologies")
 }
 
@@ -380,7 +414,7 @@ model PlayerTechnology {
   updatedAt           DateTime @updatedAt
 
   player     Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  technology Technology @relation(fields: [technologyId], references: [id])
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Restrict)
 
   @@unique([playerId, technologyId])
   @@index([researchCompletesAt])
@@ -401,14 +435,16 @@ model Territory {
   strategicValue  Int      @default(0)
   lastCapturedAt  DateTime?
   createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  ownerPlayer Player?       @relation("TerritoryOwner", fields: [ownerPlayerId], references: [id])
-  city        City?         @relation(fields: [cityId], references: [id])
-  marches     March[]
-  battles     Battle[]
+  ownerPlayer  Player?       @relation("TerritoryOwner", fields: [ownerPlayerId], references: [id], onDelete: SetNull)
+  city         City?         @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  marches      March[]
+  battles      Battle[]
   scoutReports ScoutReport[]
 
   @@unique([x, y])
+  @@index([ownerPlayerId])
   @@map("territories")
 }
 
@@ -434,11 +470,12 @@ model Battle {
   startedAt        DateTime @default(now())
   endedAt          DateTime?
   createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  attacker Player     @relation("BattleAttacker", fields: [attackerPlayerId], references: [id], onDelete: Cascade)
-  defender Player?    @relation("BattleDefender", fields: [defenderPlayerId], references: [id])
-  territory Territory? @relation(fields: [territoryId], references: [id])
-  boss     WorldBoss? @relation(fields: [bossId], references: [id])
+  attacker  Player     @relation("BattleAttacker", fields: [attackerPlayerId], references: [id], onDelete: Restrict)
+  defender  Player?    @relation("BattleDefender", fields: [defenderPlayerId], references: [id], onDelete: SetNull)
+  territory Territory? @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  boss      WorldBoss? @relation(fields: [bossId], references: [id], onDelete: SetNull)
   march    March?
   rounds   BattleRound[]
   logs     BattleLog[]
@@ -510,16 +547,19 @@ model Quest {
   title               String
   description         String
   objectiveType       String // BUILD_UPGRADE|TRAIN_UNITS|COLLECT_RESOURCE|WIN_BATTLES|SPEND_RESOURCE|REACH_POWER|JOIN_CLAN|SCOUT_TARGET|…
-  objectiveTarget     Json // { unitTypeId?, buildingType?, resource?, amount } — engine-matched
+  objectiveTarget     Json // { unitId?, buildingType?, resource?, amount } — engine-matched
   reward              Json // { GOLD?: n, XP?: n, GEMS?: n, ITEM?: id, COMMANDER?: id, ENERGY?: n }
   prerequisiteQuestIds Json? // chain gating for MAIN quests
   repeatable          Boolean @default(false)
   cooldownHours       Int     @default(0)
   isActive            Boolean @default(true)
   sortOrder           Int     @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   playerQuests PlayerQuest[]
 
+  @@index([type, sortOrder])
   @@map("quests")
 }
 
@@ -535,9 +575,10 @@ model PlayerQuest {
   expiresAt  DateTime?
   completedAt DateTime?
   claimedAt  DateTime?
+  updatedAt  DateTime  @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  quest  Quest  @relation(fields: [questId], references: [id])
+  quest  Quest  @relation(fields: [questId], references: [id], onDelete: Restrict)
 
   @@index([playerId, status])
   @@map("player_quests")
@@ -551,6 +592,8 @@ model Achievement {
   target      Int    @default(1)
   reward      Json
   isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   playerAchievements PlayerAchievement[]
 
@@ -564,7 +607,7 @@ model PlayerAchievement {
   unlockedAt    DateTime @default(now())
 
   player      Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  achievement Achievement @relation(fields: [achievementId], references: [id])
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Restrict)
 
   @@unique([playerId, achievementId])
   @@map("player_achievements")
@@ -586,8 +629,9 @@ model Clan {
   treasury      Json? // donated resources
   settings      Json? // { joinPolicy, minPower, warPreference, ... }
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  leader          Player              @relation("ClanLeader", fields: [leaderPlayerId], references: [id])
+  leader          Player              @relation("ClanLeader", fields: [leaderPlayerId], references: [id], onDelete: Restrict)
   members         ClanMember[]
   playerMembers   Player[]            @relation("PlayerClan")
   invitations     ClanInvitation[]
@@ -607,6 +651,7 @@ model ClanMember {
   role         String   @default("MEMBER") // LEADER|OFFICER|MEMBER
   contribution Int      @default(0)
   joinedAt     DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   clan   Clan   @relation(fields: [clanId], references: [id], onDelete: Cascade)
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
@@ -659,10 +704,11 @@ model ClanWar {
   winnerClanId   String?
   config         Json? // phase durations, scoring rules
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  attackerClan Clan                   @relation("ClanWarAttacker", fields: [attackerClanId], references: [id])
-  defenderClan Clan                   @relation("ClanWarDefender", fields: [defenderClanId], references: [id])
-  winnerClan   Clan?                  @relation("ClanWarWinner", fields: [winnerClanId], references: [id])
+  attackerClan Clan                   @relation("ClanWarAttacker", fields: [attackerClanId], references: [id], onDelete: Restrict)
+  defenderClan Clan                   @relation("ClanWarDefender", fields: [defenderClanId], references: [id], onDelete: Restrict)
+  winnerClan   Clan?                  @relation("ClanWarWinner", fields: [winnerClanId], references: [id], onDelete: SetNull)
   participations ClanWarParticipation[]
 
   @@index([status, endsAt])
@@ -696,9 +742,10 @@ model MarketOrder {
   filledQuantity Int      @default(0)
   status         String   @default("OPEN") // OPEN|PARTIAL|FILLED|CANCELLED|EXPIRED
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   expiresAt      DateTime?
 
-  seller       Player               @relation(fields: [sellerPlayerId], references: [id], onDelete: Cascade)
+  seller       Player               @relation(fields: [sellerPlayerId], references: [id], onDelete: Restrict)
   transactions MarketTransaction[]
 
   @@index([status, createdAt])
@@ -718,10 +765,12 @@ model MarketTransaction {
   fee            BigInt   @default(0)
   createdAt      DateTime @default(now())
 
-  order  MarketOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  buyer  Player      @relation("MarketBuyer", fields: [buyerPlayerId], references: [id])
-  seller Player      @relation("MarketSeller", fields: [sellerPlayerId], references: [id])
+  order  MarketOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  buyer  Player      @relation("MarketBuyer", fields: [buyerPlayerId], references: [id], onDelete: Restrict)
+  seller Player      @relation("MarketSeller", fields: [sellerPlayerId], references: [id], onDelete: Restrict)
 
+  @@index([buyerPlayerId, createdAt])
+  @@index([sellerPlayerId, createdAt])
   @@map("market_transactions")
 }
 
@@ -733,28 +782,34 @@ model Season {
   endsAt    DateTime
   status    String   @default("UPCOMING") // UPCOMING|ACTIVE|FINISHED
   config    Json? // duration, reward tiers, reset policy
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  snapshots LeaderboardSnapshot[]
+  snapshots Leaderboard[]
 
+  @@index([status, endsAt])
   @@map("seasons")
 }
 
-model LeaderboardSnapshot {
-  id       String   @id @default(cuid())
-  seasonId String?
-  category String // POWER|MILITARY|WEALTH|TERRITORY|HONOR|CLAN|BOSS_DAMAGE
-  period   String // WEEKLY|SEASONAL|ALL_TIME
-  playerId String
-  rank     Int
-  score    BigInt
-  rewards  Json?
+/// Materialized ranking rows. Recomputed by the ranking sweep; history per season.
+model Leaderboard {
+  id        String   @id @default(cuid())
+  seasonId  String?
+  category  String // POWER|MILITARY|WEALTH|TERRITORY|HONOR|CLAN|BOSS_DAMAGE
+  period    String // WEEKLY|SEASONAL|ALL_TIME
+  playerId  String
+  rank      Int
+  score     BigInt
+  rewards   Json?
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  season Season? @relation(fields: [seasonId], references: [id])
+  season Season? @relation(fields: [seasonId], references: [id], onDelete: SetNull)
   player Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   @@index([category, period, rank])
-  @@map("leaderboard_snapshots")
+  @@index([seasonId])
+  @@map("leaderboards")
 }
 
 // ────────────────────────────────────── BOSSES, EVENTS, SOCIAL ──────────────
@@ -768,6 +823,8 @@ model WorldBoss {
   endsAt     DateTime
   status     String   @default("SPAWNED") // SPAWNED|DEFEATED|ESCAPED
   config     Json? // schedule, reward tiers
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   battles    Battle[]
   damages    WorldBossDamage[]
@@ -801,11 +858,14 @@ model GameEvent {
   endsAt         DateTime
   config         Json? // effect magnitudes (bps), spawn tables
   status         String   @default("SCHEDULED") // SCHEDULED|ACTIVE|FINISHED|CANCELLED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  targetPlayer Player? @relation("EventTarget", fields: [targetPlayerId], references: [id])
+  targetPlayer Player? @relation("EventTarget", fields: [targetPlayerId], references: [id], onDelete: SetNull)
 
   @@index([status, endsAt])
-  @@map("game_events")
+  @@index([targetPlayerId])
+  @@map("events")
 }
 
 /// Notification outbox — IN_APP polling + BOT delivery.
@@ -835,33 +895,52 @@ model Announcement {
   isActive    Boolean  @default(true)
   createdById String
   publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  createdBy User  @relation(fields: [createdById], references: [id])
-  clan      Clan? @relation(fields: [clanId], references: [id])
+  createdBy User  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  clan      Clan? @relation(fields: [clanId], references: [id], onDelete: SetNull)
 
   @@map("announcements")
 }
 
 // ────────────────────────────────────────── ADMIN, DIPLOMACY, MISC ──────────
 
-/// Every admin mutation lands here with before/after snapshots.
-model AdminAuditLog {
-  id         String   @id @default(cuid())
-  actorUserId String
-  action     String // BAN|UNBAN|ADJUST_RESOURCES|ANNOUNCE|EVENT_SPAWN|…
-  targetType String // player|clan|order|battle|…
-  targetId   String?
-  before     Json?
-  after      Json?
-  reason     String?
-  ip         String?
-  createdAt  DateTime @default(now())
+/// Explicit admin registry (seeded from ADMIN_TELEGRAM_IDS allowlist).
+/// The User row stays the identity; this row is the authorization.
+model AdminUser {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  role         String    @default("ADMIN") // ADMIN | SUPERADMIN
+  permissions  Json? // optional fine-grained overrides
+  isActive     Boolean   @default(true)
+  lastActionAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  actor User @relation("AuditActor", fields: [actorUserId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admin_users")
+}
+
+/// Every admin mutation lands here with before/after snapshots. Append-only.
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String
+  action      String // BAN|UNBAN|ADJUST_RESOURCES|ANNOUNCE|EVENT_SPAWN|…
+  targetType  String // player|clan|order|battle|…
+  targetId    String?
+  before      Json?
+  after       Json?
+  reason      String?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  actor User @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
 
   @@index([actorUserId, createdAt])
   @@index([targetType, targetId])
-  @@map("admin_audit_logs")
+  @@map("audit_logs")
 }
 
 /// Post-MVP: player/clan relations. Schema-ready from day one.

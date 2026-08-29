@@ -3,7 +3,7 @@
 A persistent, **server-authoritative** MMO strategy game delivered as a **Telegram Bot + Mini App + REST API**.
 Build a city, raise armies, collect commanders, fight deterministic battles, conquer territories, climb leaderboards.
 
-> Status: **Phase 1a — Project Foundation: COMPLETE** (Phase 0 done · next: Phase 1b Database & Authentication)
+> Status: **Phase 2 — Database Foundation: COMPLETE** (Phase 0 architecture · Phase 1 foundation · Phase 2 schema/migration/seeds)
 > Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
 ---
@@ -55,27 +55,41 @@ bun run dev                  # http://localhost:3000
 | `bun run lint` | ESLint incl. module import-boundary rules |
 | `bun run typecheck` | `tsc --noEmit` (strict) |
 | `bun run format` / `format:check` | Prettier write / verify |
-| `bun run db:push` / `db:generate` / `db:migrate` | Prisma schema operations |
+| `bun run db:migrate` | Create/apply a Prisma migration (canonical schema flow) |
+| `bun run db:migrate:deploy` | Apply committed migrations (production) |
+| `bun run db:seed` | Idempotent dev seed: catalogs, season, admin, 2 dev players |
+| `bun run db:verify` | Assert economy invariants (ledger ⇔ wallet exact reconciliation) |
+| `bun run db:generate` | Regenerate Prisma Client |
 
 ## Project Structure (source layout)
 
 ```
+docs/                architecture documents
+prisma/
+├── schema.prisma    31-table contract + support tables (FKs · indexes · cascades)
+├── migrations/      committed SQL migrations (baseline + incremental)
+└── seed.ts          idempotent seed pipeline (reads src/lib/game/config)
+scripts/
+└── db-verify.ts     economy invariant checker (CI/quality-gate)
 src/
-├── config/        env.ts (Zod-validated, server-only) · app.ts (client-safe constants)
+├── config/          env.ts (Zod-validated, server-only) · app.ts (client-safe constants)
 ├── lib/
-│   ├── api/       envelope · error taxonomy · route factory (Zod → envelope)
-│   ├── logger/    structured JSON logger (levels · bindings · redaction)
-│   ├── health/    reference backend module (service + types + barrel)
-│   ├── db.ts      Prisma singleton
-│   └── game/      types (done) · config · engine · services (game core, later phases)
-├── features/      feature slices (TanStack Query hooks + types) — UI talks to /api only
-├── stores/        Zustand UI state slices
-├── components/    ui (shadcn) · game panels (Phase 8+)
-├── types/         shared DTO re-exports (type-only, client-safe)
-└── app/           page shell · providers · /api adapters
+│   ├── api/         envelope · error taxonomy · route factory (Zod → envelope)
+│   ├── logger/      structured JSON logger (levels · bindings · redaction)
+│   ├── health/      reference backend module (service + types + barrel)
+│   ├── db.ts        Prisma singleton
+│   └── game/
+│       ├── config/  data-driven balance (units · techs · quests · items · starter kit)
+│       ├── services/ transactional application services (player bootstrap)
+│       └── types/   domain contracts
+├── features/        feature slices (TanStack Query hooks + types) — UI talks to /api only
+├── stores/          Zustand UI state slices
+├── components/      ui (shadcn) · game panels (later phases)
+├── types/           shared DTO re-exports (type-only, client-safe)
+└── app/             page shell · providers · /api adapters
 tests/
-├── unit/          bun test — logger, errors, env, route validation
-└── e2e/           API smoke against a real server
+├── unit/            bun test — logger, errors, env, route validation, config invariants
+└── e2e/             API smoke against a real server
 ```
 
 ## Principles
