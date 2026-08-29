@@ -12,6 +12,12 @@ import {
   usePlayerStateQuery,
   usePlayerStatisticsQuery,
 } from '@/features/player'
+import {
+  ECONOMY_RESOURCE_LABELS,
+  useResourcesQuery,
+  useTransactionsQuery,
+  type EconomyResourceView,
+} from '@/features/economy'
 import { useUiStore } from '@/stores/ui.store'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -40,7 +46,12 @@ const PHASES: PhaseRow[] = [
     name: 'Player System (XP/Level curve · derived Power · statistics · energy · Profile APIs)',
     state: 'done',
   },
-  { id: '05?', name: 'City & Buildings (proposed)', state: 'next' },
+  {
+    id: '05',
+    name: 'Resource & Economy Engine (ledger · caps · idempotent grants · concurrency)',
+    state: 'done',
+  },
+  { id: '06?', name: 'City & Buildings (proposed)', state: 'next' },
   { id: '—', name: 'Army & Training', state: 'planned' },
   { id: '—', name: 'Battle Engine', state: 'planned' },
   { id: '—', name: 'Quests, Ranking & World', state: 'planned' },
@@ -52,36 +63,37 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'Data-driven XP/Level engine — curve config + pure functions',
-    file: 'src/lib/game/config/leveling.ts',
+    label: 'Economy engine — single server-side write path, BigInt math',
+    file: 'src/lib/game/services/economy.service.ts',
   },
   {
-    label: 'Power from REAL state (army · buildings · tech) — never hand-set',
-    file: 'src/lib/game/services/power.service.ts',
+    label: 'Data-driven economy config — caps · ±1e15 ceiling · reason catalog',
+    file: 'src/lib/game/config/economy.ts',
   },
   {
-    label: 'Race-safe registration — ensurePlayer · unique-race retry · lock',
-    file: 'src/lib/game/services/player-registration.service.ts',
+    label: 'Ledger-first writes — clamped deltas, Σdelta == balance invariant',
+    file: 'resource_transactions (append-only)',
   },
   {
-    label: 'Typed statistics — append-only counters, tamper-proof normalization',
-    file: 'src/lib/game/services/stats.service.ts',
+    label: 'Duplicate-reward guard — idempotency keys committed with the payout',
+    file: 'grantResources (idempotencyKey)',
   },
   {
-    label: 'Lazy-tick energy regen — partial-tick carry, cap semantics',
-    file: 'src/lib/game/config/energy.ts',
+    label: 'Race safety — per-player FIFO mutex + conditional debit guard + retry',
+    file: 'src/lib/concurrency/mutex.ts',
   },
   {
-    label: 'Profile APIs (profile · statistics · state) behind requirePlayer',
-    file: 'src/app/api/v1/player/',
+    label: 'Audited admin adjustments — before/after balances, operator identity',
+    file: 'adminAdjustResources',
   },
   {
-    label: 'Duplicate + concurrent registration scenarios covered by tests',
-    file: 'tests/integration/player/',
+    label: 'Read APIs — GET /player/resources · GET /player/transactions (GET-only)',
+    file: 'src/app/api/v1/player/resources|transactions/',
   },
   {
-    label: 'Standing infrastructure — auth · ledger · bootstrap (Phases 0–3)',
-    file: 'src/lib/auth/ · src/lib/game/',
+    label:
+      'All six scenarios tested — negative · duplicate · concurrent · overflow · unauthorized · rollback',
+    file: 'tests/integration/economy/',
   },
 ]
 
@@ -95,6 +107,37 @@ const STACK = [
   'bun test · Prettier · ESLint boundaries',
   'Telegram Bot API + Mini App',
 ]
+
+const SHORT_CODE: Record<string, string> = {
+  GOLD: 'Au',
+  WOOD: 'Wd',
+  IRON: 'Ir',
+  FOOD: 'Fd',
+  CRYSTAL: 'Cr',
+  GEMS: 'Gm',
+}
+
+function formatAmount(raw: string): string {
+  const value = Number(raw)
+  return Number.isSafeInteger(value) ? value.toLocaleString('en-US') : raw
+}
+
+function formatSignedDelta(raw: string): string {
+  const value = BigInt(raw)
+  const formatted = formatAmount(raw)
+  return value > 0n ? `+${formatted}` : formatted
+}
+
+function formatTime(iso: string): string {
+  return iso.slice(11, 19)
+}
+
+function headroomPct(entry: EconomyResourceView): number {
+  const balance = Number(entry.balance)
+  const cap = Number(entry.cap)
+  if (!Number.isSafeInteger(balance) || !Number.isSafeInteger(cap) || cap <= 0) return 0
+  return Math.min(100, Math.round((balance / cap) * 100))
+}
 
 function PhaseBadge({ state }: { state: PhaseState }) {
   if (state === 'done') {
@@ -130,6 +173,8 @@ export default function WarlordsConsole() {
   })
   const { data: state } = usePlayerStateQuery({ enabled: signedIn })
   const { data: statistics } = usePlayerStatisticsQuery({ enabled: signedIn })
+  const { data: wallet } = useResourcesQuery({ enabled: signedIn })
+  const { data: ledger } = useTransactionsQuery({ enabled: signedIn, limit: 8 })
 
   const xpPct = profile ? Math.min(100, Math.round(profile.levelProgressBps / 100)) : 0
   const energyPct = profile
@@ -156,7 +201,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 4 COMPLETE
+                PHASE 5 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -451,6 +496,116 @@ export default function WarlordsConsole() {
             </CardContent>
           </Card>
 
+          {/* Resource & Economy Engine — live from /api/v1/player/{resources,transactions} */}
+          <Card className="border-zinc-800 bg-zinc-900/60 md:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
+                Resource &amp; Economy Engine
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    wallet ? 'text-emerald-400' : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      wallet ? 'bg-emerald-400' : 'bg-zinc-600'
+                    }`}
+                  />
+                  {wallet ? 'LEDGER LIVE' : signedIn ? 'NO WALLET' : 'SIGN IN TO VIEW'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 font-mono text-xs text-zinc-400">
+              {wallet ? (
+                <>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {/* Wallet — six resources with caps + headroom */}
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                        Wallet · balance / cap
+                      </p>
+                      {wallet.resources.map((entry) => (
+                        <div key={entry.key}>
+                          <div className="flex justify-between">
+                            <span>
+                              <span className="text-amber-400/90">{SHORT_CODE[entry.key]}</span>{' '}
+                              {ECONOMY_RESOURCE_LABELS[entry.key] ?? entry.key}
+                            </span>
+                            <span className="text-zinc-200">
+                              {formatAmount(entry.balance)}
+                              <span className="text-zinc-500"> / {formatAmount(entry.cap)}</span>
+                            </span>
+                          </div>
+                          <Progress
+                            value={headroomPct(entry)}
+                            aria-label={`${entry.key} balance toward cap`}
+                            className="mt-1 h-1 bg-zinc-800"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    {/* Ledger — recent deltas, each with its reason */}
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                        Resource Ledger · newest first
+                      </p>
+                      {ledger && ledger.entries.length > 0 ? (
+                        <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                          {ledger.entries.map((entry) => (
+                            <div
+                              key={entry.id}
+                              className="flex items-center justify-between gap-2 rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1.5"
+                            >
+                              <span className="text-zinc-400">
+                                {formatTime(entry.createdAt)}{' '}
+                                <span className="text-amber-400/90">
+                                  {SHORT_CODE[entry.resource] ?? entry.resource}
+                                </span>
+                              </span>
+                              <span className="flex items-center gap-2">
+                                <span
+                                  className={
+                                    BigInt(entry.delta) > 0n ? 'text-emerald-400' : 'text-red-400'
+                                  }
+                                >
+                                  {formatSignedDelta(entry.delta)}
+                                </span>
+                                <Badge
+                                  variant="outline"
+                                  className="border-zinc-700 px-1.5 py-0 text-[9px] text-zinc-400"
+                                >
+                                  {entry.reason}
+                                </Badge>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-zinc-500">no ledger activity yet</p>
+                      )}
+                    </div>
+                  </div>
+                  <Separator className="bg-zinc-800" />
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    Ledger-first economy: every delta appends to{' '}
+                    <span className="text-amber-400">resource_transactions</span> with a reason
+                    (QUEST_REWARD · BUILDING_UPGRADE · UNIT_TRAINING · BATTLE_REWARD · MARKET_* ·
+                    ADMIN_ADJUSTMENT) and the resulting balance — Σdelta == balance per resource.
+                    Credits clamp at data-driven caps; debits are balance-guarded; the HTTP surface
+                    is read-only (GET) — every mutation is server-side and transactional.
+                  </p>
+                </>
+              ) : (
+                <p className="leading-relaxed text-zinc-500">
+                  {signedIn
+                    ? 'Signed in but no wallet projection available — first login bootstraps Player → City → Initial Resources in one transaction.'
+                    : 'Anonymous — sign in (dev-impersonate in non-production) to inspect the live ledger-backed wallet.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -535,30 +690,33 @@ export default function WarlordsConsole() {
           </CardContent>
         </Card>
 
-        {/* Phase 4 deliverables */}
+        {/* Phase 5 deliverables */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 4 — Player System Deliverables
+              Phase 5 — Resource &amp; Economy Engine Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
             {DELIVERABLES.map((d) => (
               <div
                 key={d.file}
-                className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2"
+                className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2"
               >
-                <span className="text-xs text-zinc-300">{d.label}</span>
-                <code className="shrink-0 font-mono text-[10px] text-amber-500/90">{d.file}</code>
+                <span className="min-w-0 text-xs text-zinc-300">{d.label}</span>
+                <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-500/90 [overflow-wrap:anywhere]">
+                  {d.file}
+                </code>
               </div>
             ))}
-            <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
-              <span className="text-xs text-zinc-300">
+            <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
+              <span className="min-w-0 text-xs text-zinc-300 [overflow-wrap:anywhere]">
                 Quality gate — lint · typecheck · format · unit + integration + e2e tests ·
-                production build · duplicate/concurrent registration scenarios green
+                production build · negative/duplicate/concurrent/overflow/unauthorized/rollback
+                green
               </span>
-              <code className="shrink-0 font-mono text-[10px] text-amber-400">
-                profile ✓ statistics ✓ state ✓ power ✓ tests ✓
+              <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-400 [overflow-wrap:anywhere]">
+                wallet ✓ ledger ✓ grants ✓ caps ✓ tests ✓
               </code>
             </div>
           </CardContent>
@@ -569,7 +727,7 @@ export default function WarlordsConsole() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
           <span>
-            WARLORDS Dev Console · Phase 4 · awaiting approval for Phase 5 (City &amp; Buildings)
+            WARLORDS Dev Console · Phase 5 · awaiting approval for Phase 6 (City &amp; Buildings)
           </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>

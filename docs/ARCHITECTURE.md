@@ -3,7 +3,7 @@
 > Version: 2.0 · Phase 0 (revised) · Supersedes v1.0 (preserved in git history)
 > This is the single entry point. Each view links to its deep-dive document.
 > Baseline rule: nothing in the repo is changed without a written rationale.
-> **Status:** Phases 0 · 1a · 2 · 3 · **4 (Player System)** delivered — phase contract tables in [`ROADMAP.md`](ROADMAP.md) are the source of truth.
+> **Status:** Phases 0 · 1a · 2 · 3 · 4 · **5 (Resource & Economy Engine)** delivered — phase contract tables in [`ROADMAP.md`](ROADMAP.md) are the source of truth.
 
 ---
 
@@ -67,7 +67,8 @@ Deep dive: [`BACKEND_ARCHITECTURE.md`](BACKEND_ARCHITECTURE.md)
 - HTTP adapters (`src/app/api/**`) are dumb: authenticate → rate-limit → Zod-validate → call service → envelope. Zero game logic.
 - Services (`game/services`) own DB transactions, authorization, and orchestration; they call pure engines and persist results.
 - Engines (`game/engine`) import ONLY `game/types` + `game/config` — purity contract makes battles replayable and logic unit-testable.
-- `game/config` is the **balance surface** — since Phase 4 it also carries the progression systems: `leveling.ts` (XP/Level curve), `power.ts` (bps power weights), `energy.ts` (regen tunables), `stats.ts` (counter catalog). All math is integer/bps, all pure; services own persistence. The lazy-tick energy model (timers resolved on read, partial-tick carry, persist-only-on-change) is the first live implementation of decision D4.
+- `game/config` is the **balance surface** — since Phase 4 it also carries the progression systems: `leveling.ts` (XP/Level curve), `power.ts` (bps power weights), `energy.ts` (regen tunables), `stats.ts` (counter catalog); since Phase 5, `economy.ts` (resource caps, ±1e15 mutation ceiling, ledger reason catalog, idempotency TTL). All math is integer/bps/BigInt, all pure; services own persistence. The lazy-tick energy model (timers resolved on read, partial-tick carry, persist-only-on-change) is the first live implementation of decision D4.
+- Concurrency primitives (`src/lib/concurrency/`) sit beside the leaf infra: the keyed in-process FIFO mutex (`withKeyLock`) serializes per-player critical sections (e.g. `wallet:{playerId}`) — error-isolated, idle-key evicting, deliberately not reentrant; the DB-level conditional decrement remains the cross-process backstop.
 - Full request lifecycle, error-handling strategy, logging strategy, caching strategy, WebSocket strategy — documented in the deep dive.
 
 ## View 4 — Database Architecture
@@ -106,11 +107,12 @@ Deep dive: [`BATTLE_MODEL.md`](BATTLE_MODEL.md) — full flow diagram + March st
 
 ## View 8 — Economy Architecture
 
-Deep dive: [`ECONOMY_ARCHITECTURE.md`](ECONOMY_ARCHITECTURE.md) — six transaction flows with sequence diagrams
+Deep dive: [`ECONOMY_ARCHITECTURE.md`](ECONOMY_ARCHITECTURE.md) — six transaction flows with sequence diagrams + **§7 implemented state**
 
 - Every mutation = single DB transaction with in-tx re-validation + ledger append (`delta`, `balanceAfter`, `reason`, `refType/refId`).
 - Six canonical flows specified: production collect · building upgrade spend · unit training · battle loot transfer · market escrow fill · admin adjust.
 - Faucets/sinks table for inflation control; idempotency-keys on all sensitive ops; negative balance structurally impossible.
+- **Implemented (Phase 5):** the ledger-first economy engine is live — `game/config/economy.ts` (caps · ±1e15 ceiling · closed reason catalog · 24h grant-idempotency TTL) + `game/services/economy.service.ts` as THE single server-side write path (validate-ALL-then-write, cap-clamped credits that keep Σdelta==balance reconciled, conditional compare-and-decrement debits, idempotent `grantResources`, audited `adminAdjustResources`) serialized per player by the `lib/concurrency` mutex; the economy HTTP surface is deliberately GET-only (`GET /api/v1/player/resources`, `GET /api/v1/player/transactions`). Decision D-lazy-tick references unchanged — production accrual (§3.1) lands with City & Buildings.
 
 ## View 9 — Notification Architecture
 
@@ -169,7 +171,7 @@ warlords/
 │   │   └── api/
 │   │       ├── health/route.ts
 │   │       └── v1/
-│   │           ├── auth/ player/ city/ army/ battle/ world/   # auth + player delivered (Phases 3–4)
+│   │           ├── auth/ player/ city/ army/ battle/ world/   # auth + player (incl. economy reads resources/transactions) delivered (Phases 3–5)
 │   │           ├── quests/ rankings/ clans/ market/ notifications/
 │   │           ├── telegram/ (webhook + dev long-poll)
 │   │           └── admin/
@@ -183,15 +185,16 @@ warlords/
 │   │   ├── api/             # response envelope · AppError taxonomy
 │   │   ├── auth/            # initData verify · session JWT · RBAC guards
 │   │   ├── rate-limit/      # sliding window (memory impl, Redis-ready iface)
+│   │   ├── concurrency/     # keyed in-process FIFO mutex (withKeyLock — wallet serialization, Phase 5 ✅)
 │   │   ├── cache/           # TTL cache + single-flight (memory impl, Redis-ready iface)
 │   │   ├── logger/          # structured JSON logger
 │   │   ├── bot/             # Bot API client · command handlers · delivery queue
 │   │   ├── telegram/        # client-side WebApp wrapper
 │   │   └── game/
 │   │       ├── types/       # domain contracts (Phase 0 ✅)
-│   │       ├── config/      # data-driven content + balance surface: units · techs · quests · items · starter kit · leveling · power · energy · stats (Phase 4 ✅)
+│   │       ├── config/      # data-driven content + balance surface: units · techs · quests · items · starter kit · leveling · power · energy · stats · economy (Phase 4 ✅ · Phase 5 ✅)
 │   │       ├── engine/      # PURE: economy · battle · quest · progress · world
-│   │       ├── services/    # transactional application services (bootstrap · registration · progression · power · stats · energy · player state — Phase 4 ✅)
+│   │       ├── services/    # transactional application services (bootstrap · registration · progression · power · stats · energy · player state · economy — Phases 4–5 ✅)
 │   │       └── utils/       # bigint math · seeded PRNG · time
 │   └── types/               # shared DTO re-exports
 ├── mini-services/           # optional realtime (socket.io) — Phase 6+

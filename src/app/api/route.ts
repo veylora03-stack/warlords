@@ -20,6 +20,8 @@ export const GET = defineRoute({}, async ({ request }) => {
       'player:profile': 'GET /api/v1/player/profile',
       'player:statistics': 'GET /api/v1/player/statistics',
       'player:state': 'GET /api/v1/player/state',
+      'player:resources': 'GET /api/v1/player/resources',
+      'player:transactions': 'GET /api/v1/player/transactions?limit&cursor&reason (ledger history)',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

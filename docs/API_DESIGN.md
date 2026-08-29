@@ -77,7 +77,7 @@ All auth routes share the auth rate-limit group (10/min per IP, enforced before 
 
 Failure codes: `INVALID_INIT_DATA` 401 (with `details.reason`), `UNAUTHORIZED` 401, `SESSION_EXPIRED` 401, `SESSION_REVOKED` 401, `BANNED` 403, `AUTH_NOT_CONFIGURED` 503, `RATE_LIMITED` 429, `NOT_FOUND` 404 (dev-impersonate in production) — full map in AUTHENTICATION.md §5.
 
-### 2.3 Player — Phase 4 ✅ (profile surface implemented)
+### 2.3 Player — Phase 4 ✅ (profile surface) · Phase 5 ✅ (economy read surface)
 
 Auth = session credential (see §1.3): `Authorization: Bearer` wins, else the `wl_session` cookie — enforced by the `requirePlayer` guard (`requireAuth` + player-presence). Reads accept no client input beyond the authenticated player id.
 
@@ -94,12 +94,36 @@ Serialization & freshness notes:
 
 Failure codes: `UNAUTHORIZED` 401 (missing/invalid/expired/revoked session), `PLAYER_NOT_FOUND` 404 (valid session whose user has no bootstrapped player — a server-side inconsistency, not a client-fixable state).
 
-Still planned (original Phase 2 catalog, not yet implemented):
+#### 2.3.1 Economy — Phase 5 ✅ (wallet + ledger read surface, read-only)
+
+The economy HTTP surface is deliberately **GET-only** — no client write path for resources exists anywhere; every mutation flows through `services/economy.service.ts` inside server-owned transactions (see ECONOMY_ARCHITECTURE §7). Auth = `requirePlayer` (Bearer wins, else `wl_session`; sliding refresh re-issues Set-Cookie inside the 48h window, same as the profile routes). The player id always comes from the session principal — never from input — so only the caller's OWN wallet/ledger rows are reachable.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/player/resources` | Six-resource wallet projection in canonical order: `{ playerId, resources: [{ key, balance, cap, headroom }] ×6 (GOLD · WOOD · IRON · FOOD · CRYSTAL · GEMS), updatedAt }`. `cap`/`headroom` come from the data-driven config (`RESOURCE_CAPS`) so clients render progress bars without authority math; five balances live on the wallet row, GEMS on `Player.gems` |
+| GET | `/api/v1/player/transactions?limit&cursor&reason` | Personal ledger history, newest first: `{ entries: [{ id, resource, delta, balanceAfter, reason, refType, refId, metadata, createdAt }], nextCursor, hasMore }`. Keyset-paginated on `(createdAt, id)`; cursor format `"<ISO createdAt>\|<id>"` (opaque — pass `nextCursor` back verbatim). The originally planned `/player/me/transactions` row (below) is **implemented by this endpoint** |
+
+Query contract (Zod-validated — invalid values → 400 `VALIDATION_ERROR`):
+
+| Param | Rule |
+|---|---|
+| `limit` | integer 1–100 (default 25; bounds from `ECONOMY_HISTORY` config) |
+| `cursor` | string 1–200 chars; malformed → `VALIDATION_ERROR` |
+| `reason` | optional filter — must be a member of the closed ledger catalog (`BOOTSTRAP · QUEST_REWARD · BUILDING_UPGRADE · UNIT_TRAINING · BATTLE_REWARD · MARKET_PURCHASE · MARKET_SALE · ADMIN_ADJUSTMENT`) |
+
+Serialization & scoping notes:
+- All amounts (`balance`, `cap`, `headroom`, `delta`, `balanceAfter`) are **BigInt-as-strings**; clients do display math only.
+- `reason` on each entry is the closed catalog value that produced the delta; `metadata` may carry e.g. `{actorUserId, note}` for `ADMIN_ADJUSTMENT` rows.
+- Strict per-player isolation: every row is scoped by `playerId` from the principal; there is no cross-player read path.
+
+Failure codes: `UNAUTHORIZED` 401 (anonymous or garbage/expired/revoked credential), `PLAYER_NOT_FOUND` 404, `VALIDATION_ERROR` 400 (bad query params), `INTERNAL_ERROR` 500 (missing wallet row = bootstrap bug). **No write methods exist** — route modules export exactly `['GET']` (asserted by tests).
+
+Still planned (not yet implemented):
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/player/:id` | Public profile (no wallet detail, no army detail) |
-| GET | `/api/v1/player/me/transactions?resource=&cursor=` | Personal ledger (paginated) |
+| ~~GET | `/api/v1/player/me/transactions?resource=&cursor=`~~ | Superseded — delivered in Phase 5 as `GET /api/v1/player/transactions?limit&cursor&reason` (§2.3.1) |
 
 ### 2.4 City & buildings — Phase 3
 

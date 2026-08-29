@@ -3,9 +3,9 @@
 A persistent, **server-authoritative** MMO strategy game delivered as a **Telegram Bot + Mini App + REST API**.
 Build a city, raise armies, collect commanders, fight deterministic battles, conquer territories, climb leaderboards.
 
-> Status: **Phase 4 — Player System: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 Telegram auth · Phase 4 XP/Level curve · derived power · statistics · lazy energy · Profile APIs)
+> Status: **Phase 5 — Resource & Economy Engine: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 Telegram auth · Phase 4 player system · Phase 5 data-driven economy config · ledger-first write path · idempotent grants · race-safety layers · audited admin adjustments · wallet/ledger read APIs)
 > Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
-> Live API: `/api/health` · `POST /api/v1/auth/telegram` · `GET /api/v1/auth/me` · `POST /api/v1/auth/logout` · `POST /api/v1/auth/dev-impersonate` *(dev only)* · `GET /api/v1/player/profile` · `GET /api/v1/player/statistics` · `GET /api/v1/player/state` — machine-readable index at `GET /api`
+> Live API: `/api/health` · `POST /api/v1/auth/telegram` · `GET /api/v1/auth/me` · `POST /api/v1/auth/logout` · `POST /api/v1/auth/dev-impersonate` *(dev only)* · `GET /api/v1/player/profile` · `GET /api/v1/player/statistics` · `GET /api/v1/player/state` · `GET /api/v1/player/resources` · `GET /api/v1/player/transactions` — machine-readable index at `GET /api`
 
 ---
 
@@ -53,8 +53,8 @@ bun run dev                  # http://localhost:3000
 | `bun run build` | Typechecked production build (standalone output) |
 | `bun run start` | Serve the production build (`PORT` env respected) |
 | `bun run test` | Unit tests (`bun test tests/unit/`) |
-| `bun run test:integration` | Integration tests (auth + player system; routes + DB, no HTTP server) |
-| `bun run test:e2e` | API smoke tests against a running server (`E2E_BASE_URL` optional) |
+| `bun run test:integration` | Integration tests (auth + player system + economy engine; routes + DB, no HTTP server) |
+| `bun run test:e2e` | API smoke tests against a running server (api · auth · player · economy; `E2E_BASE_URL` optional) |
 | `bun run lint` | ESLint incl. module import-boundary rules |
 | `bun run typecheck` | `tsc --noEmit` (strict) |
 | `bun run format` / `format:check` | Prettier write / verify |
@@ -81,22 +81,23 @@ src/
 │   ├── auth/        session service · JWT (jose) · cookies · guard · hashing
 │   ├── telegram/    initData HMAC verification (Telegram-official, pure)
 │   ├── rate-limit/  in-memory sliding window (Redis-ready store interface)
+│   ├── concurrency/ keyed in-process FIFO mutex (withKeyLock — per-player wallet serialization)
 │   ├── logger/      structured JSON logger (levels · bindings · redaction)
 │   ├── health/      reference backend module (service + types + barrel)
 │   ├── db.ts        Prisma singleton
 │   └── game/
-│       ├── config/  data-driven balance (units · techs · quests · items · starter kit · leveling · power · energy · stats)
-│       ├── services/ transactional application services (bootstrap · registration · progression · power · stats · energy · player state)
+│       ├── config/  data-driven balance (units · techs · quests · items · starter kit · leveling · power · energy · stats · economy — caps · ceiling · reason catalog · idempotency TTL)
+│       ├── services/ transactional application services (bootstrap · registration · progression · power · stats · energy · player state · economy engine)
 │       └── types/   domain contracts
 ├── features/        feature slices (TanStack Query hooks + types) — UI talks to /api only
 ├── stores/          Zustand UI state slices
 ├── components/      ui (shadcn) · game panels (later phases)
 ├── types/           shared DTO re-exports (type-only, client-safe)
-└── app/             page shell · providers · /api adapters (incl. /api/v1/auth/* · /api/v1/player/*)
+└── app/             page shell · providers · /api adapters (incl. /api/v1/auth/* · /api/v1/player/* incl. resources + transactions)
 tests/
-├── unit/            bun test — telegram initData, auth jwt/rate-limit, logger, errors, env, route validation, config invariants, game systems (leveling · power · energy · stats)
-├── integration/     auth + player-system flow tests (routes + DB, real secrets, no HTTP server)
-└── e2e/             API smoke against a real server (api · auth · player)
+├── unit/            bun test — telegram initData, auth jwt/rate-limit, logger, errors, env, route validation, config invariants, game systems (leveling · power · energy · stats · economy + mutex)
+├── integration/     auth + player-system + economy-engine flow tests (routes + DB, real secrets, no HTTP server)
+└── e2e/             API smoke against a real server (api · auth · player · economy)
 ```
 
 ## Principles
@@ -104,5 +105,5 @@ tests/
 1. **Never trust the client** — every resource, battle result, reward and cooldown is computed server-side.
 2. **Ledger economy** — every resource delta is appended to `resource_transactions` with `balanceAfter`; negative balances are structurally impossible.
 3. **Deterministic battles** — `(seed, configVersion, inputs)` fully replays any engagement.
-4. **Data-driven balance** — unit/building/tech/quest numbers and the progression systems (XP curve, power weights, energy tunables, stat catalog) live in typed config, never hard-coded in logic.
+4. **Data-driven balance** — unit/building/tech/quest numbers, the progression systems (XP curve, power weights, energy tunables, stat catalog) and the economy surface (resource caps, mutation ceiling, ledger reason catalog) live in typed config, never hard-coded in logic.
 5. **Working software over claims** — every phase exits through lint + typecheck + build + tests + runtime verification.

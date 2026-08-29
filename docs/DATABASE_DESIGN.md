@@ -251,8 +251,8 @@ strings, money is BigInt, JSON columns are PG `jsonb`-ready).
 | players | `Player` | progression + premium/action currencies; `stats` JSON governed by the typed catalog (`config/stats.ts`); `power` is a derived cache (see Phase 4 semantics below) |
 | cities | `City` | unique (x,y) capital |
 | buildings | `Building` | unique (cityId,type); timer columns for lazy-tick upgrades |
-| resources | `ResourceWallet` | per-player balance cache — ledger is the truth |
-| resource_transactions | `ResourceTransaction` | immutable ledger, balanceAfter chain |
+| resources | `ResourceWallet` | per-player balance cache — **live since Phase 2 (bootstrap faucet), written since Phase 5 only by the economy service**; ledger is the truth |
+| resource_transactions | `ResourceTransaction` | immutable ledger, `balanceAfter` chain — **live since Phase 5**: one row per changed resource per mutation; `resource` ∈ GOLD…GEMS (GEMS rows exist even though GEMS balances sit on `players`), `reason` ∈ the closed `LEDGER_REASONS` catalog |
 | units | `Unit` | catalog (seeded from `src/lib/game/config/units.ts`) |
 | player_units | `PlayerUnit` | unique (playerId, unitId) stacks |
 | commanders | `Commander` | catalog |
@@ -319,6 +319,27 @@ schema; it pinned down how two existing columns are governed:
   next recalculation, and the profile/state endpoints return the freshly
   computed value. Bootstrap computes the initial power as its final step.
 
+**Economy ledger semantics (`resources` + `resource_transactions`, Phase 5).** The economy engine
+(`src/lib/game/services/economy.service.ts`) is the single server-side write path for all six
+resources: GOLD/WOOD/IRON/FOOD/CRYSTAL persist on the `resources` wallet row, GEMS (premium) on
+`players.gems` — but both storage targets flow through the SAME ledger, so `Σ(delta) == balance`
+reconciles per resource regardless of where the balance lives. Debits persist via conditional
+compare-and-decrement (`updateMany where field >= amount` on both tables) — the DB-level
+no-negative guarantee, independent of any lock. Credits clamp at the config caps
+(`RESOURCE_CAPS`, `config/economy.ts`) and record the CLAMPED delta, keeping the ledger
+reconciled; a fully-capped credit applies 0 and writes **no** ledger row. Every row carries a
+reason from the closed catalog (`BOOTSTRAP · QUEST_REWARD · BUILDING_UPGRADE · UNIT_TRAINING ·
+BATTLE_REWARD · MARKET_PURCHASE · MARKET_SALE · ADMIN_ADJUSTMENT`).
+
+**Idempotency keys in use (`idempotency_keys`, Phase 5).** `grantResources` claims a key row
+(`action: 'resource_grant'`, `playerId`, sha256 `requestHash` of {playerId, reason, ref, amounts},
+serialized `responseBody`, `expiresAt = now + 24h` per `GRANT_IDEMPOTENCY_TTL_SECONDS`) **inside
+the same transaction as the payout** — grant+key commit or roll back atomically, so a crash leaves
+zero residue and a retry works fresh. Replays within the TTL return the original result
+(`replayed: true`); a key reused with a different payload, or a concurrent duplicate that loses the
+unique race, fails with 409 `IDEMPOTENT_REPLAY`. Audited `ADMIN_ADJUSTMENT` mutations additionally
+write an `audit_logs` row (action `ADJUST_RESOURCES`, before/after balance maps) in the same tx.
+
 **Registration concurrency semantics (Phase 4).** `Player.userId` UNIQUE is the
 hard guarantee that one user owns at most one player. On top of it, first login
 runs through `ensurePlayer` (`player-registration.service.ts`): idempotent
@@ -342,5 +363,8 @@ pattern with ledger appends and `balanceAfter` chain inside the tx boundary.
 
 **Verification.** `bun run db:verify` asserts on the real database: ledger
 Σdelta == wallet per resource, `balanceAfter` chain consistency, per-player
-completeness, in-DB config reference integrity, coordinate uniqueness.
+completeness, in-DB config reference integrity, coordinate uniqueness. The Phase 5
+integration suite additionally asserts the ledger invariant per test run — Σdelta==balance and
+balance ≥ 0 for every resource after parallel mixed operations, clamped credits included, and
+that zero-applied (fully capped) credits leave no rows.
 `bun run test` guards the config catalogs before they can reach the DB.
