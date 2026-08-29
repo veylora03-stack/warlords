@@ -1,6 +1,8 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
@@ -18,6 +20,13 @@ import {
   useTransactionsQuery,
   type EconomyResourceView,
 } from '@/features/economy'
+import {
+  BUILDING_ICONS,
+  useCityQuery,
+  useFinishBuildingMutation,
+  useUpgradeBuildingMutation,
+  type CityBuildingView,
+} from '@/features/city'
 import { useUiStore } from '@/stores/ui.store'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -51,8 +60,12 @@ const PHASES: PhaseRow[] = [
     name: 'Resource & Economy Engine (ledger · caps · idempotent grants · concurrency)',
     state: 'done',
   },
-  { id: '06?', name: 'City & Buildings (proposed)', state: 'next' },
-  { id: '—', name: 'Army & Training', state: 'planned' },
+  {
+    id: '06',
+    name: 'City & Building System (17 buildings · server-side upgrades · construction timers)',
+    state: 'done',
+  },
+  { id: '07?', name: 'Army & Training (proposed)', state: 'next' },
   { id: '—', name: 'Battle Engine', state: 'planned' },
   { id: '—', name: 'Quests, Ranking & World', state: 'planned' },
   { id: '—', name: 'Telegram Bot', state: 'planned' },
@@ -63,37 +76,37 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'Economy engine — single server-side write path, BigInt math',
-    file: 'src/lib/game/services/economy.service.ts',
+    label: 'Building catalog — 17 types · per-level cost/duration/requirements/effects',
+    file: 'src/lib/game/config/buildings.ts',
   },
   {
-    label: 'Data-driven economy config — caps · ±1e15 ceiling · reason catalog',
-    file: 'src/lib/game/config/economy.ts',
+    label: 'City service — transactional upgrades, double-spend-proof construction',
+    file: 'src/lib/game/services/city.service.ts',
   },
   {
-    label: 'Ledger-first writes — clamped deltas, Σdelta == balance invariant',
-    file: 'resource_transactions (append-only)',
+    label: 'Ledger-driven costs — every debit carries BUILDING_UPGRADE + building ref',
+    file: 'spendResources (reason: BUILDING_UPGRADE)',
   },
   {
-    label: 'Duplicate-reward guard — idempotency keys committed with the payout',
-    file: 'grantResources (idempotencyKey)',
+    label: 'Construction lifecycle — start/finish timers, server clock authority',
+    file: 'IDLE → CONSTRUCTING → COMPLETABLE → IDLE',
   },
   {
-    label: 'Race safety — per-player FIFO mutex + conditional debit guard + retry',
-    file: 'src/lib/concurrency/mutex.ts',
+    label: 'Race safety — wallet mutex + queue-slot check + conditional claim guard',
+    file: 'startBuildingUpgrade / finishBuildingUpgrade',
   },
   {
-    label: 'Audited admin adjustments — before/after balances, operator identity',
-    file: 'adminAdjustResources',
+    label: 'Live effects — power recalculated on completion · production · storage',
+    file: 'recalculatePlayerPower + city view aggregates',
   },
   {
-    label: 'Read APIs — GET /player/resources · GET /player/transactions (GET-only)',
-    file: 'src/app/api/v1/player/resources|transactions/',
+    label: 'APIs — GET /city · GET /city/buildings · POST upgrade · POST finish',
+    file: 'src/app/api/v1/city/**',
   },
   {
     label:
-      'All six scenarios tested — negative · duplicate · concurrent · overflow · unauthorized · rollback',
-    file: 'tests/integration/economy/',
+      'All scenarios tested — upgrade flow · insufficient · queue · prereqs · max level · concurrent double-spend · rollback · unauthorized',
+    file: 'tests/integration/city/',
   },
 ]
 
@@ -139,6 +152,58 @@ function headroomPct(entry: EconomyResourceView): number {
   return Math.min(100, Math.round((balance / cap) * 100))
 }
 
+/** Compact human strings for a building's effect map (display only). */
+function formatEffects(effects: Record<string, unknown>): string {
+  const parts: string[] = []
+  const production = effects['productionPerHour'] as Record<string, number> | undefined
+  if (production) {
+    for (const [resource, rate] of Object.entries(production)) {
+      parts.push(`${SHORT_CODE[resource] ?? resource} ${rate.toLocaleString('en-US')}/h`)
+    }
+  }
+  const storage = effects['storageCapacity']
+  if (typeof storage === 'number') parts.push(`cap ${storage.toLocaleString('en-US')}`)
+  const defense = effects['defenseBps']
+  if (typeof defense === 'number') parts.push(`def +${Math.round(defense - 10_000) / 100}%`)
+  const queue = effects['queueSlots']
+  if (typeof queue === 'number') parts.push(`queue ×${queue}`)
+  const bpsLabels: Array<[string, string]> = [
+    ['trainingSpeedBps', 'train'],
+    ['researchSpeedBps', 'research'],
+    ['equipmentSpeedBps', 'equip'],
+    ['scoutSpeedBps', 'scout'],
+    ['spyPowerBps', 'spy'],
+  ]
+  for (const [key, label] of bpsLabels) {
+    const value = effects[key]
+    if (typeof value === 'number' && value !== 10_000) {
+      parts.push(`${label} +${Math.round(value - 10_000) / 100}%`)
+    }
+  }
+  const hospital = effects['hospitalCapacity']
+  if (typeof hospital === 'number') parts.push(`beds ${hospital}`)
+  const march = effects['marchSlots']
+  if (typeof march === 'number') parts.push(`marches ×${march}`)
+  const fee = effects['marketFeeBps']
+  if (typeof fee === 'number') parts.push(`fee ${fee / 100}%`)
+  return parts.join(' · ')
+}
+
+function formatCountdown(completesAtIso: string, nowMs: number): string {
+  const remainingSec = Math.max(0, Math.ceil((Date.parse(completesAtIso) - nowMs) / 1000))
+  const mm = Math.floor(remainingSec / 60)
+  const ss = remainingSec % 60
+  return mm > 0 ? `${mm}m ${String(ss).padStart(2, '0')}s` : `${ss}s`
+}
+
+function formatCost(cost: Partial<Record<string, string>>): string {
+  return Object.entries(cost)
+    .map(
+      ([resource, amount]) => `${SHORT_CODE[resource] ?? resource} ${formatAmount(amount ?? '0')}`,
+    )
+    .join(' ')
+}
+
 function PhaseBadge({ state }: { state: PhaseState }) {
   if (state === 'done') {
     return (
@@ -161,6 +226,89 @@ function PhaseBadge({ state }: { state: PhaseState }) {
   )
 }
 
+interface CityBuildingRowProps {
+  building: CityBuildingView
+  nowTick: number
+  disabled: boolean
+  onUpgrade: () => void
+  onFinish: () => void
+}
+
+/** One building row: level, live construction state, next-upgrade preview + actions. */
+function CityBuildingRow({
+  building,
+  nowTick,
+  disabled,
+  onUpgrade,
+  onFinish,
+}: CityBuildingRowProps) {
+  const next = building.nextUpgrade
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate">
+          <span aria-hidden>{BUILDING_ICONS[building.type] ?? '🏗️'}</span>{' '}
+          <span className="font-semibold text-zinc-200">{building.name}</span>{' '}
+          <span className="text-zinc-500">
+            lv{building.level}/{building.maxLevel}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {building.status === 'CONSTRUCTING' ? (
+            <Badge className="bg-amber-500/15 border border-amber-500/40 px-1.5 py-0 text-[10px] text-amber-300">
+              → lv{building.pendingLevel} · {formatCountdown(building.upgradeCompletesAt!, nowTick)}
+            </Badge>
+          ) : building.status === 'COMPLETABLE' ? (
+            <Badge className="bg-emerald-500/15 border border-emerald-500/40 px-1.5 py-0 text-[10px] text-emerald-300">
+              READY lv{building.pendingLevel}
+            </Badge>
+          ) : (
+            <span className="text-[10px] text-zinc-600">idle</span>
+          )}
+          {building.status === 'COMPLETABLE' ? (
+            <Button
+              size="sm"
+              className="h-7 bg-emerald-600 px-2 text-[10px] font-bold text-zinc-950 hover:bg-emerald-500"
+              disabled={disabled}
+              onClick={onFinish}
+            >
+              FINISH
+            </Button>
+          ) : building.nextUpgrade ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 border-amber-500/40 bg-amber-500/10 px-2 text-[10px] font-bold text-amber-400 hover:bg-amber-500/20"
+              disabled={disabled || !building.nextUpgrade.requirementsMet}
+              onClick={onUpgrade}
+              aria-label={`Upgrade ${building.name} to level ${building.nextUpgrade.toLevel}`}
+            >
+              UPGRADE
+            </Button>
+          ) : null}
+        </span>
+      </div>
+      <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+        <span className="min-w-0 text-[10px] text-zinc-500">
+          {formatEffects(building.effects) || '—'}
+        </span>
+        {building.status === 'IDLE' && next ? (
+          <span className="min-w-0 text-right text-[10px] [overflow-wrap:anywhere]">
+            <span className="text-zinc-500">→ lv{next.toLevel}: </span>
+            <span className="text-zinc-400">{formatCost(next.cost)}</span>
+            <span className="text-zinc-600"> · {next.durationSec}s · </span>
+            {next.requirementsMet ? (
+              <span className="text-emerald-400">ready</span>
+            ) : (
+              <span className="text-orange-400">{next.unmetRequirements[0] ?? 'locked'}</span>
+            )}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export default function WarlordsConsole() {
   const autoRefresh = useUiStore((s) => s.autoRefresh)
   const toggleAutoRefresh = useUiStore((s) => s.toggleAutoRefresh)
@@ -175,6 +323,26 @@ export default function WarlordsConsole() {
   const { data: statistics } = usePlayerStatisticsQuery({ enabled: signedIn })
   const { data: wallet } = useResourcesQuery({ enabled: signedIn })
   const { data: ledger } = useTransactionsQuery({ enabled: signedIn, limit: 8 })
+  const { data: city } = useCityQuery({ enabled: signedIn })
+
+  const upgradeBuilding = useUpgradeBuildingMutation()
+  const finishBuilding = useFinishBuildingMutation()
+
+  // Cosmetic 1s tick so construction countdowns advance (server clock stays
+  // the authority — it decides whether a finish claim is accepted).
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  const hasActiveConstruction = (city?.construction.activeCount ?? 0) > 0
+  useEffect(() => {
+    if (!hasActiveConstruction) return
+    const timer = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [hasActiveConstruction])
+
+  const anyMutationPending = upgradeBuilding.isPending || finishBuilding.isPending
+  const mutationError = upgradeBuilding.error ?? finishBuilding.error
+  const mutationErrorDetail = (
+    mutationError as (Error & { details?: { missing?: string[] } }) | null
+  )?.details?.missing
 
   const xpPct = profile ? Math.min(100, Math.round(profile.levelProgressBps / 100)) : 0
   const energyPct = profile
@@ -201,7 +369,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 5 COMPLETE
+                PHASE 6 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -606,6 +774,119 @@ export default function WarlordsConsole() {
             </CardContent>
           </Card>
 
+          {/* City & Building System — live from /api/v1/city with upgrade/finish mutations */}
+          <Card className="border-zinc-800 bg-zinc-900/60 md:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
+                City &amp; Building System
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    city
+                      ? city.construction.activeCount > 0
+                        ? 'text-amber-400'
+                        : 'text-emerald-400'
+                      : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      city
+                        ? city.construction.activeCount > 0
+                          ? 'animate-pulse bg-amber-400'
+                          : 'bg-emerald-400'
+                        : 'bg-zinc-600'
+                    }`}
+                  />
+                  {city
+                    ? `${city.construction.activeCount}/${city.construction.queueSlots} QUEUE`
+                    : signedIn
+                      ? 'NO CITY'
+                      : 'SIGN IN TO VIEW'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 font-mono text-xs text-zinc-400">
+              {city ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        capital
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {city.city.name} @ ({city.city.x},{city.city.y})
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        production / h
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {(
+                          [
+                            ['GOLD', city.production.GOLD],
+                            ['WOOD', city.production.WOOD],
+                            ['IRON', city.production.IRON],
+                            ['FOOD', city.production.FOOD],
+                          ] as Array<[string, number]>
+                        )
+                          .map(([key, rate]) => `${SHORT_CODE[key]} ${rate}`)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        warehouse storage
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {city.storage.capacity.toLocaleString('en-US')}
+                      </span>
+                    </div>
+                  </div>
+                  <Separator className="bg-zinc-800" />
+                  {mutationError ? (
+                    <p className="text-red-400" role="alert">
+                      {(mutationError as Error & { code?: string }).code ?? 'ERROR'}:{' '}
+                      {mutationError.message ?? 'construction action failed'}
+                      {mutationErrorDetail && mutationErrorDetail.length > 0 ? (
+                        <span className="block text-[10px] text-red-400/80">
+                          {mutationErrorDetail.join(' · ')}
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
+                  <div className="max-h-96 space-y-1.5 overflow-y-auto pr-1">
+                    {city.buildings.map((building) => (
+                      <CityBuildingRow
+                        key={building.id}
+                        building={building}
+                        nowTick={nowTick}
+                        disabled={anyMutationPending}
+                        onUpgrade={() => upgradeBuilding.mutate(building.type)}
+                        onFinish={() => finishBuilding.mutate(building.type)}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    Server-side upgrades only: cost, duration, requirements and queue come from the
+                    server catalog — the debit and the construction timer commit in ONE transaction
+                    (ledger reason <span className="text-amber-400">BUILDING_UPGRADE</span>).
+                    Concurrent starters converge behind the per-player mutex; double-spending is
+                    structurally impossible. Completion is claimed against the server clock, then
+                    power is recalculated from real state.
+                  </p>
+                </>
+              ) : (
+                <p className="leading-relaxed text-zinc-500">
+                  {signedIn
+                    ? 'Signed in but no city projection available — registration bootstraps the capital with all 17 buildings at level 1.'
+                    : 'Anonymous — sign in to view the live city and start construction.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -690,11 +971,11 @@ export default function WarlordsConsole() {
           </CardContent>
         </Card>
 
-        {/* Phase 5 deliverables */}
+        {/* Phase 6 deliverables */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 5 — Resource &amp; Economy Engine Deliverables
+              Phase 6 — City &amp; Building System Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -712,11 +993,10 @@ export default function WarlordsConsole() {
             <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="min-w-0 text-xs text-zinc-300 [overflow-wrap:anywhere]">
                 Quality gate — lint · typecheck · format · unit + integration + e2e tests ·
-                production build · negative/duplicate/concurrent/overflow/unauthorized/rollback
-                green
+                production build · upgrade/queue/prereq/double-spend/rollback/unauthorized green
               </span>
               <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-400 [overflow-wrap:anywhere]">
-                wallet ✓ ledger ✓ grants ✓ caps ✓ tests ✓
+                catalog ✓ upgrades ✓ timers ✓ ledger ✓ tests ✓
               </code>
             </div>
           </CardContent>
@@ -727,7 +1007,7 @@ export default function WarlordsConsole() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
           <span>
-            WARLORDS Dev Console · Phase 5 · awaiting approval for Phase 6 (City &amp; Buildings)
+            WARLORDS Dev Console · Phase 6 · awaiting approval for Phase 7 (Army &amp; Training)
           </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>

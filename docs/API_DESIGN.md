@@ -125,14 +125,18 @@ Still planned (not yet implemented):
 | GET | `/api/v1/player/:id` | Public profile (no wallet detail, no army detail) |
 | ~~GET | `/api/v1/player/me/transactions?resource=&cursor=`~~ | Superseded — delivered in Phase 5 as `GET /api/v1/player/transactions?limit&cursor&reason` (§2.3.1) |
 
-### 2.4 City & buildings — Phase 3
+### 2.4 City & buildings — Phase 6 (IMPLEMENTED)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/city` | City + buildings + production rates + capacity + running constructions |
-| POST | `/api/v1/city/buildings/:type/upgrade` | Validates cost/requirements/queue slot → debits wallet (ledger) → sets timer |
-| POST | `/api/v1/city/buildings/:type/cancel` | Refund %, clear slot (audited) |
-| GET | `/api/v1/city/collect` | Materialize accrued production up to capacity (ledger rows) |
+| GET | `/api/v1/city` | City + all 17 buildings (level, construction status `IDLE·CONSTRUCTING·COMPLETABLE`, timers, per-level effects) + aggregate production/storage/queue; per-building `nextUpgrade` preview with server-evaluated `requirementsMet` + human-readable `unmetRequirements` |
+| GET | `/api/v1/city/buildings` | Materialized catalog: 17 types × every level (integer-bps cost recurrence, duration, requirements, effects); costs cross as display strings (BigInt policy) |
+| POST | `/api/v1/city/buildings/:type/upgrade` | Server-side authority over everything: type validated → requirements evaluated against real DB state (TH/player level/cross-building) → queue-slot check → cost debited via economy service (ledger `BUILDING_UPGRADE`, refType `building`) → construction timer claimed with a conditional update — ALL in one per-player serialized transaction. Refusals (typed, zero writes): `BUILDING_NOT_FOUND` · `CONSTRUCTION_IN_PROGRESS` · `MAX_LEVEL_REACHED` · `PREREQUISITE_MISSING` (details.missing[]) · `BUILDING_QUEUE_BUSY` · `INSUFFICIENT_*` |
+| POST | `/api/v1/city/buildings/:type/finish` | Claims a completed construction against the SERVER clock (`CONSTRUCTION_NOT_COMPLETE` + `remainingSec` if early); conditional level application (guarded on in-flight state) → `CONSTRUCTION_COMPLETE` notification → power recalculated from real state — one transaction; retries → `CONSTRUCTION_NOT_ACTIVE` (level can never be applied twice) |
+| ~~POST | `/api/v1/city/buildings/:type/cancel`~~ | Deferred — not part of the Phase 6 user contract (refund policy needs its own design pass) |
+| ~~GET | `/api/v1/city/collect`~~ | Deferred — production accrual lands with the economy lazy-tick phase (rates are already computed and exposed by `GET /city`) |
+
+Path params: dynamic `[type]` segments arrive through the extended `defineRoute` (`params` Zod schema, Next.js Promise params). Queue capacity = `constructionQueueSlots(townHallLevel)` (1 slot; +1 at TH 10 — config-driven).
 
 ### 2.5 Army — Phase 4
 

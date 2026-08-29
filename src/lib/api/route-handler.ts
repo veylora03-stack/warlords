@@ -39,24 +39,30 @@ export async function parseJsonBody(request: Request): Promise<unknown> {
 
 // ── Route factory ────────────────────────────────────────────────────────────
 
-export interface RouteContext<TBody, TQuery> {
+export interface RouteContext<TBody, TQuery, TParams> {
   request: Request
   body: TBody
   query: TQuery
+  /** Validated dynamic path params (e.g. `[type]` segments). Empty object for static routes. */
+  params: TParams
 }
 
-export interface RouteSpec<TBody, TQuery> {
+export interface RouteSpec<TBody, TQuery, TParams> {
   /** Zod schema for the JSON body. Omit for GET/no-body routes. */
   body?: z.ZodType<TBody>
   /** Zod schema for URL search params (values arrive as strings). */
   query?: z.ZodType<TQuery>
+  /** Zod schema for the dynamic path params Next.js passes as the 2nd arg (a Promise). */
+  params?: z.ZodType<TParams>
 }
 
-export type RouteHandler<TBody, TQuery> = (
-  ctx: RouteContext<TBody, TQuery>,
+export type RouteHandler<TBody, TQuery, TParams> = (
+  ctx: RouteContext<TBody, TQuery, TParams>,
 ) => Promise<Response> | Response
 
-type LooseRouteHandler = (ctx: RouteContext<unknown, unknown>) => Promise<Response> | Response
+type LooseRouteHandler = (
+  ctx: RouteContext<unknown, unknown, unknown>,
+) => Promise<Response> | Response
 
 /**
  * Creates a Next.js route handler with validation + envelope + logging wired.
@@ -66,15 +72,28 @@ type LooseRouteHandler = (ctx: RouteContext<unknown, unknown>) => Promise<Respon
  *   const result = await battleService.attack(request, body)
  *   return ok(request, result)
  * })
+ *
+ * Dynamic segments ([type], [id]) arrive as `ctx.params` after Zod validation:
+ * export const POST = defineRoute(
+ *   { params: z.object({ type: z.string() }) },
+ *   async ({ params, request }) => ok(request, await city.upgrade(request, params.type)),
+ * )
  */
-export function defineRoute<TBody = undefined, TQuery = undefined>(
-  spec: RouteSpec<TBody, TQuery>,
-  fn: RouteHandler<TBody, TQuery>,
-): (request: Request) => Promise<Response> {
-  return async function routeHandler(request: Request): Promise<Response> {
+export function defineRoute<TBody = undefined, TQuery = undefined, TParams = undefined>(
+  spec: RouteSpec<TBody, TQuery, TParams>,
+  fn: RouteHandler<TBody, TQuery, TParams>,
+): (
+  request: Request,
+  routeCtx?: { params?: Promise<Record<string, string>> },
+) => Promise<Response> {
+  return async function routeHandler(
+    request: Request,
+    routeCtx?: { params?: Promise<Record<string, string>> },
+  ): Promise<Response> {
     return handle(request, async () => {
       let body: unknown = undefined
       let query: unknown = undefined
+      let params: unknown = undefined
 
       if (spec.body) {
         const raw = await parseJsonBody(request)
@@ -84,13 +103,20 @@ export function defineRoute<TBody = undefined, TQuery = undefined>(
       }
 
       if (spec.query) {
-        const params = Object.fromEntries(new URL(request.url).searchParams.entries())
-        const parsed = spec.query.safeParse(params)
+        const search = Object.fromEntries(new URL(request.url).searchParams.entries())
+        const parsed = spec.query.safeParse(search)
         if (!parsed.success) throw zodErrorToAppError(parsed.error)
         query = parsed.data
       }
 
-      return (fn as LooseRouteHandler)({ request, body, query })
+      if (spec.params) {
+        const raw = (await routeCtx?.params) ?? {}
+        const parsed = spec.params.safeParse(raw)
+        if (!parsed.success) throw zodErrorToAppError(parsed.error)
+        params = parsed.data
+      }
+
+      return (fn as LooseRouteHandler)({ request, body, query, params })
     })
   }
 }

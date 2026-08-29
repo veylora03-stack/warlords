@@ -3,9 +3,9 @@
 A persistent, **server-authoritative** MMO strategy game delivered as a **Telegram Bot + Mini App + REST API**.
 Build a city, raise armies, collect commanders, fight deterministic battles, conquer territories, climb leaderboards.
 
-> Status: **Phase 5 — Resource & Economy Engine: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 Telegram auth · Phase 4 player system · Phase 5 data-driven economy config · ledger-first write path · idempotent grants · race-safety layers · audited admin adjustments · wallet/ledger read APIs)
+> Status: **Phase 6 — City & Building System: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 Telegram auth · Phase 4 player system · Phase 5 economy engine · Phase 6 building catalog · transactional server-side upgrades · construction timers · queue capacity · requirement gates · city read APIs)
 > Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
-> Live API: `/api/health` · `POST /api/v1/auth/telegram` · `GET /api/v1/auth/me` · `POST /api/v1/auth/logout` · `POST /api/v1/auth/dev-impersonate` *(dev only)* · `GET /api/v1/player/profile` · `GET /api/v1/player/statistics` · `GET /api/v1/player/state` · `GET /api/v1/player/resources` · `GET /api/v1/player/transactions` — machine-readable index at `GET /api`
+> Live API: `/api/health` · `POST /api/v1/auth/telegram` · `GET /api/v1/auth/me` · `POST /api/v1/auth/logout` · `POST /api/v1/auth/dev-impersonate` *(dev only)* · `GET /api/v1/player/profile` · `GET /api/v1/player/statistics` · `GET /api/v1/player/state` · `GET /api/v1/player/resources` · `GET /api/v1/player/transactions` · `GET /api/v1/city` · `GET /api/v1/city/buildings` · `POST /api/v1/city/buildings/:type/upgrade` · `POST /api/v1/city/buildings/:type/finish` — machine-readable index at `GET /api`
 
 ---
 
@@ -53,8 +53,8 @@ bun run dev                  # http://localhost:3000
 | `bun run build` | Typechecked production build (standalone output) |
 | `bun run start` | Serve the production build (`PORT` env respected) |
 | `bun run test` | Unit tests (`bun test tests/unit/`) |
-| `bun run test:integration` | Integration tests (auth + player system + economy engine; routes + DB, no HTTP server) |
-| `bun run test:e2e` | API smoke tests against a running server (api · auth · player · economy; `E2E_BASE_URL` optional) |
+| `bun run test:integration` | Integration tests (auth + player system + economy engine + city & building system; routes + DB, no HTTP server) |
+| `bun run test:e2e` | API smoke tests against a running server (api · auth · player · economy · city; `E2E_BASE_URL` optional) |
 | `bun run lint` | ESLint incl. module import-boundary rules |
 | `bun run typecheck` | `tsc --noEmit` (strict) |
 | `bun run format` / `format:check` | Prettier write / verify |

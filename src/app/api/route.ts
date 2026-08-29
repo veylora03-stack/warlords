@@ -22,6 +22,12 @@ export const GET = defineRoute({}, async ({ request }) => {
       'player:state': 'GET /api/v1/player/state',
       'player:resources': 'GET /api/v1/player/resources',
       'player:transactions': 'GET /api/v1/player/transactions?limit&cursor&reason (ledger history)',
+      'city:state': 'GET /api/v1/city (buildings · production · storage · construction queue)',
+      'city:building-catalog':
+        'GET /api/v1/city/buildings (per-level costs · durations · requirements · effects)',
+      'city:upgrade':
+        'POST /api/v1/city/buildings/:type/upgrade (server-side cost + construction timer)',
+      'city:finish': 'POST /api/v1/city/buildings/:type/finish (claim completed construction)',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

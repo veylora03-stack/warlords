@@ -340,6 +340,17 @@ zero residue and a retry works fresh. Replays within the TTL return the original
 unique race, fails with 409 `IDEMPOTENT_REPLAY`. Audited `ADMIN_ADJUSTMENT` mutations additionally
 write an `audit_logs` row (action `ADJUST_RESOURCES`, before/after balance maps) in the same tx.
 
+
+**Construction state lives on `buildings` (Phase 6).** No new table: the Phase 2
+schema deliberately carries `isConstructing` / `upgradeStartedAt` /
+`upgradeCompletesAt` / `pendingLevel` (`@@unique([cityId, type])` = one row per
+type). The city service treats those four columns as the construction record —
+status is DERIVED (IDLE / CONSTRUCTING / COMPLETABLE), never stored. An upgrade
+commits cost (ledger `BUILDING_UPGRADE`) and the timer in ONE transaction; the
+finish claim applies `level = pendingLevel` with a conditional update guarded on
+the in-flight state, writes the `CONSTRUCTION_COMPLETE` notification and
+recalculates power in the same transaction. `@@index([upgradeCompletesAt])`
+stands ready for the future lazy-tick resolver.
 **Registration concurrency semantics (Phase 4).** `Player.userId` UNIQUE is the
 hard guarantee that one user owns at most one player. On top of it, first login
 runs through `ensurePlayer` (`player-registration.service.ts`): idempotent

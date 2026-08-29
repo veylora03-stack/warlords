@@ -3,7 +3,7 @@
 > Version: 2.0 · Phase 0 (revised) · Supersedes v1.0 (preserved in git history)
 > This is the single entry point. Each view links to its deep-dive document.
 > Baseline rule: nothing in the repo is changed without a written rationale.
-> **Status:** Phases 0 · 1a · 2 · 3 · 4 · **5 (Resource & Economy Engine)** delivered — phase contract tables in [`ROADMAP.md`](ROADMAP.md) are the source of truth.
+> **Status:** Phases 0 · 1a · 2 · 3 · 4 · 5 · **6 (City & Building System)** delivered — phase contract tables in [`ROADMAP.md`](ROADMAP.md) are the source of truth.
 
 ---
 
