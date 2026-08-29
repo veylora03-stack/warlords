@@ -17,6 +17,9 @@ export const GET = defineRoute({}, async ({ request }) => {
       'auth:me': 'GET /api/v1/auth/me',
       'auth:logout': 'POST /api/v1/auth/logout',
       'auth:dev-impersonate': 'POST /api/v1/auth/dev-impersonate (non-production only)',
+      'player:profile': 'GET /api/v1/player/profile',
+      'player:statistics': 'GET /api/v1/player/statistics',
+      'player:state': 'GET /api/v1/player/state',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

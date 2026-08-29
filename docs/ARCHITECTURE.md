@@ -3,6 +3,7 @@
 > Version: 2.0 · Phase 0 (revised) · Supersedes v1.0 (preserved in git history)
 > This is the single entry point. Each view links to its deep-dive document.
 > Baseline rule: nothing in the repo is changed without a written rationale.
+> **Status:** Phases 0 · 1a · 2 · 3 · **4 (Player System)** delivered — phase contract tables in [`ROADMAP.md`](ROADMAP.md) are the source of truth.
 
 ---
 
@@ -66,6 +67,7 @@ Deep dive: [`BACKEND_ARCHITECTURE.md`](BACKEND_ARCHITECTURE.md)
 - HTTP adapters (`src/app/api/**`) are dumb: authenticate → rate-limit → Zod-validate → call service → envelope. Zero game logic.
 - Services (`game/services`) own DB transactions, authorization, and orchestration; they call pure engines and persist results.
 - Engines (`game/engine`) import ONLY `game/types` + `game/config` — purity contract makes battles replayable and logic unit-testable.
+- `game/config` is the **balance surface** — since Phase 4 it also carries the progression systems: `leveling.ts` (XP/Level curve), `power.ts` (bps power weights), `energy.ts` (regen tunables), `stats.ts` (counter catalog). All math is integer/bps, all pure; services own persistence. The lazy-tick energy model (timers resolved on read, partial-tick carry, persist-only-on-change) is the first live implementation of decision D4.
 - Full request lifecycle, error-handling strategy, logging strategy, caching strategy, WebSocket strategy — documented in the deep dive.
 
 ## View 4 — Database Architecture
@@ -167,7 +169,7 @@ warlords/
 │   │   └── api/
 │   │       ├── health/route.ts
 │   │       └── v1/
-│   │           ├── auth/ player/ city/ army/ battle/ world/
+│   │           ├── auth/ player/ city/ army/ battle/ world/   # auth + player delivered (Phases 3–4)
 │   │           ├── quests/ rankings/ clans/ market/ notifications/
 │   │           ├── telegram/ (webhook + dev long-poll)
 │   │           └── admin/
@@ -187,9 +189,9 @@ warlords/
 │   │   ├── telegram/        # client-side WebApp wrapper
 │   │   └── game/
 │   │       ├── types/       # domain contracts (Phase 0 ✅)
-│   │       ├── config/      # data-driven content + BattleConfig snapshots
+│   │       ├── config/      # data-driven content + balance surface: units · techs · quests · items · starter kit · leveling · power · energy · stats (Phase 4 ✅)
 │   │       ├── engine/      # PURE: economy · battle · quest · progress · world
-│   │       ├── services/    # transactional application services
+│   │       ├── services/    # transactional application services (bootstrap · registration · progression · power · stats · energy · player state — Phase 4 ✅)
 │   │       └── utils/       # bigint math · seeded PRNG · time
 │   └── types/               # shared DTO re-exports
 ├── mini-services/           # optional realtime (socket.io) — Phase 6+

@@ -24,8 +24,13 @@ import { db } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import { verifyInitData, type TelegramInitDataUser } from '@/lib/telegram'
-import { findFreeCityCoordinate } from '@/lib/game/services/city-site.service'
-import { bootstrapPlayer } from '@/lib/game/services/player-bootstrap.service'
+import {
+  ensurePlayer,
+  isUniqueConstraintError,
+  withWriteRetry,
+  withRegistrationLock,
+  REGISTRATION_TX_OPTIONS,
+} from '@/lib/game/services/player-registration.service'
 import type { Env } from '@/config/env'
 import { mintSessionToken, verifySessionToken, type SessionClaims } from './jwt'
 import { sha256Hex, safeDigestEqual } from './hash'
@@ -42,7 +47,12 @@ import type {
 
 const log = logger.child({ module: 'auth' })
 
-const PLAYER_NAME_MAX_LENGTH = 32
+/** Internal retry signal: a concurrent registration raced this transaction. */
+class RegistrationRaceError extends Error {
+  constructor() {
+    super('concurrent player registration raced this session transaction')
+  }
+}
 
 // ── Shared internals ─────────────────────────────────────────────────────────
 
@@ -105,153 +115,176 @@ async function issueSession(args: IssueSessionArgs): Promise<ExchangeResult> {
   const now = new Date()
   const expiresAt = new Date(now.getTime() + args.cfg.sessionTtlSeconds * 1000)
 
-  const result = await db.$transaction(async (tx) => {
-    // 1) Identity upsert — telegramId is THE identity; username is display-only.
-    const user = await tx.user.upsert({
-      where: { telegramId: args.telegramId },
-      create: {
-        telegramId: args.telegramId,
-        firstName: args.profile?.firstName ?? 'Warlord',
-        lastName: args.profile?.lastName,
-        username: args.profile?.username,
-        languageCode: args.profile?.languageCode ?? 'en',
-        photoUrl: args.profile?.photoUrl,
-        lastLoginAt: now,
-      },
-      update: {
-        firstName: args.profile?.firstName,
-        lastName: args.profile?.lastName ?? null,
-        username: args.profile?.username ?? null,
-        languageCode: args.profile?.languageCode,
-        photoUrl: args.profile?.photoUrl ?? null,
-        lastLoginAt: now,
-      },
-      include: { player: true },
-    })
+  const result = await withRegistrationLock(() =>
+    withWriteRetry(
+      () =>
+        db
+          .$transaction(async (tx) => {
+            // 1) Identity upsert — telegramId is THE identity; username is display-only.
+            const user = await tx.user.upsert({
+              where: { telegramId: args.telegramId },
+              create: {
+                telegramId: args.telegramId,
+                firstName: args.profile?.firstName ?? 'Warlord',
+                lastName: args.profile?.lastName,
+                username: args.profile?.username,
+                languageCode: args.profile?.languageCode ?? 'en',
+                photoUrl: args.profile?.photoUrl,
+                lastLoginAt: now,
+              },
+              update: {
+                firstName: args.profile?.firstName,
+                lastName: args.profile?.lastName ?? null,
+                username: args.profile?.username ?? null,
+                languageCode: args.profile?.languageCode,
+                photoUrl: args.profile?.photoUrl ?? null,
+                lastLoginAt: now,
+              },
+              include: { player: true },
+            })
 
-    // 2) Ban enforcement at the gate (tx rolls back everything above on throw).
-    assertNotBanned(user)
+            // 2) Ban enforcement at the gate (tx rolls back everything above on throw).
+            assertNotBanned(user)
 
-    // 3) Housekeeping: drop this user's expired session rows.
-    await tx.authSession.deleteMany({
-      where: { userId: user.id, expiresAt: { lte: now } },
-    })
+            // 3) Housekeeping: drop this user's expired session rows.
+            await tx.authSession.deleteMany({
+              where: { userId: user.id, expiresAt: { lte: now } },
+            })
 
-    // 4) Replay resolution — one live session per initData.
-    const existing = await tx.authSession.findUnique({ where: { initDataHash: args.initDataHash } })
-    let sessionId: string
-    let replayed = false
+            // 4) Replay resolution — one live session per initData.
+            const existing = await tx.authSession.findUnique({
+              where: { initDataHash: args.initDataHash },
+            })
+            let sessionId: string
+            let replayed = false
 
-    if (
-      existing &&
-      existing.userId === user.id &&
-      !existing.revokedAt &&
-      existing.expiresAt.getTime() > now.getTime()
-    ) {
-      replayed = true
-      sessionId = existing.id
-      log.warn('auth initData replay — re-attached to original session', {
-        userId: user.id,
-        telegramId: user.telegramId,
-        sessionId,
-      })
-    } else {
-      if (existing) {
-        // Revoked or expired row holding this initData hash — replace it.
-        await tx.authSession.delete({ where: { id: existing.id } })
-      }
-      sessionId = randomUUID()
-    }
+            if (
+              existing &&
+              existing.userId === user.id &&
+              !existing.revokedAt &&
+              existing.expiresAt.getTime() > now.getTime()
+            ) {
+              replayed = true
+              sessionId = existing.id
+              log.warn('auth initData replay — re-attached to original session', {
+                userId: user.id,
+                telegramId: user.telegramId,
+                sessionId,
+              })
+            } else {
+              if (existing) {
+                // Revoked or expired row holding this initData hash — replace it.
+                await tx.authSession.delete({ where: { id: existing.id } })
+              }
+              sessionId = randomUUID()
+            }
 
-    // 5) Mint JWT (sid → session row) and persist the row with token hash only.
-    const minted = await mintSessionToken({
-      claims: { sub: user.id, sid: sessionId, role: user.role },
-      jwtSecret: args.cfg.jwtSecret,
-      ttlSeconds: args.cfg.sessionTtlSeconds,
-      now,
-    })
+            // 5) Mint JWT (sid → session row) and persist the row with token hash only.
+            const minted = await mintSessionToken({
+              claims: { sub: user.id, sid: sessionId, role: user.role },
+              jwtSecret: args.cfg.jwtSecret,
+              ttlSeconds: args.cfg.sessionTtlSeconds,
+              now,
+            })
 
-    if (replayed && existing) {
-      await tx.authSession.update({
-        where: { id: sessionId },
-        data: {
-          tokenHash: sha256Hex(minted.token),
-          lastUsedAt: now,
-          // Expiry is NOT extended by a replay — only fresh initData refreshes.
-        },
-      })
-    } else {
-      await tx.authSession.create({
-        data: {
-          id: sessionId,
-          userId: user.id,
-          initDataHash: args.initDataHash,
-          tokenHash: sha256Hex(minted.token),
-          telegramAuthDate: args.telegramAuthDate,
-          issuedIp: args.ip,
-          userAgent: args.userAgent,
-          lastUsedAt: now,
-          expiresAt,
-        },
-      })
-    }
+            if (replayed && existing) {
+              await tx.authSession.update({
+                where: { id: sessionId },
+                data: {
+                  tokenHash: sha256Hex(minted.token),
+                  lastUsedAt: now,
+                  // Expiry is NOT extended by a replay — only fresh initData refreshes.
+                },
+              })
+            } else {
+              await tx.authSession.create({
+                data: {
+                  id: sessionId,
+                  userId: user.id,
+                  initDataHash: args.initDataHash,
+                  tokenHash: sha256Hex(minted.token),
+                  telegramAuthDate: args.telegramAuthDate,
+                  issuedIp: args.ip,
+                  userAgent: args.userAgent,
+                  lastUsedAt: now,
+                  expiresAt,
+                },
+              })
+            }
 
-    // 6) First login → full player bootstrap in the SAME transaction
-    //    (Phase 2 bootstrap service — the single player-creation path).
-    let playerProfile: { id: string; name: string; level: number }
-    if (user.player) {
-      playerProfile = { id: user.player.id, name: user.player.name, level: user.player.level }
-    } else {
-      const cityName =
-        (
-          args.profile?.username ??
-          args.profile?.firstName ??
-          user.username ??
-          user.firstName ??
-          'Warlord'
-        )
-          .trim()
-          .slice(0, PLAYER_NAME_MAX_LENGTH) || 'Warlord'
-      const site = await findFreeCityCoordinate(tx)
-      const bootstrapped = await bootstrapPlayer(tx, {
-        userId: user.id,
-        name: cityName,
-        city: site,
-      })
-      playerProfile = await tx.player.findUniqueOrThrow({
-        where: { id: bootstrapped.playerId },
-        select: { id: true, name: true, level: true },
-      })
-      log.info('auth first login — player bootstrapped', {
-        userId: user.id,
-        telegramId: user.telegramId,
-        playerId: playerProfile.id,
-        cityId: bootstrapped.cityId,
-      })
-    }
+            // 6) First login → full player bootstrap in the SAME transaction
+            //    (Phase 2 bootstrap service — the single player-creation path).
+            //    ensurePlayer is idempotent + race-safe: duplicate/concurrent
+            //    registrations converge on the same Player row (UNIQUE userId).
+            let playerProfile: { id: string; name: string; level: number }
+            const registration = await ensurePlayer(tx, {
+              userId: user.id,
+              name:
+                args.profile?.username ??
+                args.profile?.firstName ??
+                user.username ??
+                user.firstName ??
+                'Warlord',
+            })
+            if (registration.created) {
+              playerProfile = await tx.player.findUniqueOrThrow({
+                where: { id: registration.playerId },
+                select: { id: true, name: true, level: true },
+              })
+              log.info('auth first login — player bootstrapped', {
+                userId: user.id,
+                telegramId: user.telegramId,
+                playerId: playerProfile.id,
+                cityId: registration.cityId,
+              })
+            } else if (user.player) {
+              playerProfile = {
+                id: user.player.id,
+                name: user.player.name,
+                level: user.player.level,
+              }
+            } else {
+              // Player was created concurrently inside this window — re-attach.
+              playerProfile = await tx.player.findUniqueOrThrow({
+                where: { id: registration.playerId },
+                select: { id: true, name: true, level: true },
+              })
+            }
 
-    // 7) Optional audit trail (dev impersonation).
-    if (args.audit) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: user.id,
-          action: args.audit.action,
-          targetType: 'user',
-          targetId: user.id,
-          reason: args.audit.reason,
-          ip: args.ip,
-        },
-      })
-    }
+            // 7) Optional audit trail (dev impersonation).
+            if (args.audit) {
+              await tx.auditLog.create({
+                data: {
+                  actorUserId: user.id,
+                  action: args.audit.action,
+                  targetType: 'user',
+                  targetId: user.id,
+                  reason: args.audit.reason,
+                  ip: args.ip,
+                },
+              })
+            }
 
-    return {
-      user,
-      player: playerProfile,
-      minted,
-      replayed,
-      sessionId,
-    }
-  })
+            return {
+              user,
+              player: playerProfile,
+              minted,
+              replayed,
+              sessionId,
+            }
+          }, REGISTRATION_TX_OPTIONS)
+          .catch((err) => {
+            // A unique race means a parallel login for the SAME user won the
+            // player-insert between our read and our commit. The tx aborted
+            // atomically — a clean retry observes their player and re-attaches.
+            if (isUniqueConstraintError(err)) throw new RegistrationRaceError()
+            throw err
+          }),
+      // Concurrent same-user logins converge: unique races + SQLite write
+      // contention are retried (bounded); everything else fails fast.
+      (err) => err instanceof RegistrationRaceError,
+    ),
+  )
 
   log.info('auth session issued', {
     userId: result.user.id,

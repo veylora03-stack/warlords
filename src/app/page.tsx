@@ -2,10 +2,16 @@
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { useHealthQuery } from '@/features/system'
 import { useMeQuery } from '@/features/auth'
+import {
+  usePlayerProfileQuery,
+  usePlayerStateQuery,
+  usePlayerStatisticsQuery,
+} from '@/features/player'
 import { useUiStore } from '@/stores/ui.store'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -29,8 +35,12 @@ const PHASES: PhaseRow[] = [
     name: 'Telegram Authentication (initData HMAC · sessions · guard · replay defense)',
     state: 'done',
   },
-  { id: '04?', name: 'Player, Resources & Economy Core (proposed)', state: 'next' },
-  { id: '—', name: 'City & Buildings', state: 'planned' },
+  {
+    id: '04',
+    name: 'Player System (XP/Level curve · derived Power · statistics · energy · Profile APIs)',
+    state: 'done',
+  },
+  { id: '05?', name: 'City & Buildings (proposed)', state: 'next' },
   { id: '—', name: 'Army & Training', state: 'planned' },
   { id: '—', name: 'Battle Engine', state: 'planned' },
   { id: '—', name: 'Quests, Ranking & World', state: 'planned' },
@@ -42,36 +52,36 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'initData HMAC verification (Telegram-official algorithm, timing-safe)',
-    file: 'src/lib/telegram/',
+    label: 'Data-driven XP/Level engine — curve config + pure functions',
+    file: 'src/lib/game/config/leveling.ts',
   },
   {
-    label: 'Session service — tx: user upsert · replay guard · JWT · bootstrap',
-    file: 'src/lib/auth/session.service.ts',
+    label: 'Power from REAL state (army · buildings · tech) — never hand-set',
+    file: 'src/lib/game/services/power.service.ts',
   },
   {
-    label: 'auth_sessions table (token hashes · initData dedup · revocation)',
-    file: 'prisma/migrations/*_add_auth_sessions/',
+    label: 'Race-safe registration — ensurePlayer · unique-race retry · lock',
+    file: 'src/lib/game/services/player-registration.service.ts',
   },
   {
-    label: 'Authorization guard — bearer/cookie · DB ban check · sliding refresh',
-    file: 'src/lib/auth/guard.ts',
+    label: 'Typed statistics — append-only counters, tamper-proof normalization',
+    file: 'src/lib/game/services/stats.service.ts',
   },
   {
-    label: 'Auth endpoints (login · me · logout · dev-impersonate)',
-    file: 'src/app/api/v1/auth/',
+    label: 'Lazy-tick energy regen — partial-tick carry, cap semantics',
+    file: 'src/lib/game/config/energy.ts',
   },
   {
-    label: 'Sliding-window rate limiter (Redis-ready interface)',
-    file: 'src/lib/rate-limit/',
+    label: 'Profile APIs (profile · statistics · state) behind requirePlayer',
+    file: 'src/app/api/v1/player/',
   },
   {
-    label: 'Unit + integration tests (7 attack scenarios covered)',
-    file: 'tests/unit/ · tests/integration/',
+    label: 'Duplicate + concurrent registration scenarios covered by tests',
+    file: 'tests/integration/player/',
   },
   {
-    label: 'Env config layer + structured logger (standing)',
-    file: 'src/config/ · src/lib/logger/',
+    label: 'Standing infrastructure — auth · ledger · bootstrap (Phases 0–3)',
+    file: 'src/lib/auth/ · src/lib/game/',
   },
 ]
 
@@ -114,6 +124,18 @@ export default function WarlordsConsole() {
   const { data: health, error: healthError } = useHealthQuery({ enabled: autoRefresh })
   const { data: me, error: meError, isPending: mePending } = useMeQuery()
 
+  const signedIn = Boolean(me)
+  const { data: profile, isPending: profilePending } = usePlayerProfileQuery({
+    enabled: signedIn,
+  })
+  const { data: state } = usePlayerStateQuery({ enabled: signedIn })
+  const { data: statistics } = usePlayerStatisticsQuery({ enabled: signedIn })
+
+  const xpPct = profile ? Math.min(100, Math.round(profile.levelProgressBps / 100)) : 0
+  const energyPct = profile
+    ? Math.round((profile.energy / Math.max(1, profile.energyMax)) * 100)
+    : 0
+
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 selection:bg-amber-500/30">
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -134,7 +156,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 3 COMPLETE
+                PHASE 4 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -294,6 +316,141 @@ export default function WarlordsConsole() {
             </CardContent>
           </Card>
 
+          {/* Player System — live from /api/v1/player/* via TanStack Query */}
+          <Card className="border-zinc-800 bg-zinc-900/60 md:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
+                Player System
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    profile ? 'text-emerald-400' : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      profile ? 'bg-emerald-400' : 'bg-zinc-600'
+                    }`}
+                  />
+                  {profile ? 'PLAYER STATE LIVE' : signedIn ? 'NO PLAYER' : 'SIGN IN TO VIEW'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 font-mono text-xs text-zinc-400">
+              {profile ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span>warlord</span>
+                        <span className="text-zinc-200">{profile.name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>level</span>
+                        <span className="text-amber-400">
+                          {profile.level} <span className="text-zinc-500">(xp {profile.xp})</span>
+                        </span>
+                      </div>
+                      <div>
+                        <div className="mb-1 flex justify-between">
+                          <span>xp_progress</span>
+                          <span className="text-zinc-300">
+                            {profile.xpIntoLevel}/{profile.xpForNextLevel || 'MAX'}
+                          </span>
+                        </div>
+                        <Progress
+                          value={xpPct}
+                          aria-label="XP progress toward next level"
+                          className="h-1.5 bg-zinc-800"
+                        />
+                      </div>
+                      <div className="flex justify-between">
+                        <span>power</span>
+                        <span className="text-zinc-200">
+                          {profile.power}{' '}
+                          <span className="text-zinc-500">
+                            (army {profile.powerBreakdown.units} · bld{' '}
+                            {profile.powerBreakdown.buildings} · tech{' '}
+                            {profile.powerBreakdown.technologies})
+                          </span>
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>honor / reputation</span>
+                        <span className="text-zinc-200">
+                          {profile.honor} · {profile.reputation}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <div className="mb-1 flex justify-between">
+                          <span>energy</span>
+                          <span className="text-zinc-300">
+                            {profile.energy}/{profile.energyMax}
+                          </span>
+                        </div>
+                        <Progress
+                          value={energyPct}
+                          aria-label="Energy pool"
+                          className="h-1.5 bg-zinc-800"
+                        />
+                      </div>
+                      <div className="flex justify-between">
+                        <span>city</span>
+                        <span className="text-zinc-200">
+                          {state?.profile.city
+                            ? `${state.profile.city.name} (${state.profile.city.x},${state.profile.city.y})`
+                            : profile.city
+                              ? `${profile.city.x},${profile.city.y}`
+                              : '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>wallet</span>
+                        <span className="text-zinc-200">
+                          {state
+                            ? `Au ${state.wallet.gold} · Wd ${state.wallet.wood} · Ir ${state.wallet.iron} · Fd ${state.wallet.food} · Cr ${state.wallet.crystal}`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>army / buildings</span>
+                        <span className="text-zinc-200">
+                          {state
+                            ? `${state.army.reduce((sum, u) => sum + u.count, 0)} units · ${state.buildingCount} bld`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>lifetime (stats)</span>
+                        <span className="text-zinc-200">
+                          {statistics
+                            ? `wins ${statistics.statistics['battlesWon'] ?? 0} · trained ${statistics.statistics['unitsTrained'] ?? 0} · collected ${statistics.statistics['resourcesCollected'] ?? 0}`
+                            : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <Separator className="bg-zinc-800" />
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    Level derives from total XP through the data-driven curve; power is recomputed
+                    from the real army/buildings/technology state on every request — neither value
+                    can be set or forged by a client.
+                  </p>
+                </>
+              ) : profilePending && signedIn ? (
+                <p className="animate-pulse text-zinc-500">probing /api/v1/player/state …</p>
+              ) : (
+                <p className="leading-relaxed text-zinc-500">
+                  {signedIn
+                    ? 'Signed in but no player projection available — first login bootstraps Player → City → Initial Resources in one transaction.'
+                    : 'Anonymous — sign in (dev-impersonate in non-production) and the server bootstraps Player → City → Initial Resources on first login.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -378,11 +535,11 @@ export default function WarlordsConsole() {
           </CardContent>
         </Card>
 
-        {/* Phase 3 deliverables */}
+        {/* Phase 4 deliverables */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 3 — Telegram Authentication Deliverables
+              Phase 4 — Player System Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -397,11 +554,11 @@ export default function WarlordsConsole() {
             ))}
             <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="text-xs text-zinc-300">
-                Quality gate — migrate · generate · lint · typecheck · unit + integration + e2e
-                tests · production build · 7 auth attack scenarios green
+                Quality gate — lint · typecheck · format · unit + integration + e2e tests ·
+                production build · duplicate/concurrent registration scenarios green
               </span>
               <code className="shrink-0 font-mono text-[10px] text-amber-400">
-                verify ✓ sessions ✓ guard ✓ tests ✓
+                profile ✓ statistics ✓ state ✓ power ✓ tests ✓
               </code>
             </div>
           </CardContent>
@@ -411,7 +568,9 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>WARLORDS Dev Console · Phase 3 · awaiting approval for Phase 4 (Economy Core)</span>
+          <span>
+            WARLORDS Dev Console · Phase 4 · awaiting approval for Phase 5 (City &amp; Buildings)
+          </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

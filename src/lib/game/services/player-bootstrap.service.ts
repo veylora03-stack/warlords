@@ -3,11 +3,11 @@
  *
  * Creates the FULL player state in ONE transaction (sensitive-operation rule):
  * player → wallet → ledger faucet rows → city → starter buildings → starter
- * army → starter quests → welcome notification. Any failure rolls back
- * everything — a half-bootstrapped player can never exist.
+ * army → starter quests → welcome notification → power calculation. Any
+ * failure rolls back everything — a half-bootstrapped player can never exist.
  *
  * The caller owns the transaction: pass `tx` from `db.$transaction(...)`.
- * Consumers: dev seed (prisma/seed.ts) now; auth signup service (next phase).
+ * Consumers: player-registration.service (auth first login) and the dev seed.
  */
 
 import type { Prisma } from '@prisma/client'
@@ -19,6 +19,8 @@ import {
   STARTER_UNITS,
   STARTER_WALLET,
 } from '@/lib/game/config/starter'
+import { recalculatePlayerPower } from './power.service'
+import { emptyPlayerStats } from '@/lib/game/config/stats'
 
 export type Tx = Prisma.TransactionClient
 
@@ -39,13 +41,16 @@ export async function bootstrapPlayer(
 ): Promise<BootstrapPlayerResult> {
   const now = new Date()
 
-  // 1) Player row (premium/action currencies live on Player, resources on wallet)
+  // 1) Player row (premium/action currencies live on Player, resources on wallet).
+  //    Statistics start zero-filled (typed counters, config/stats.ts) and the
+  //    power column is a projection — recalculated from real state at the end.
   const player = await tx.player.create({
     data: {
       userId: input.userId,
       name: input.name,
       energy: STARTER_ENERGY,
       energyUpdatedAt: now,
+      stats: emptyPlayerStats(),
     },
     select: { id: true },
   })
@@ -134,6 +139,9 @@ export async function bootstrapPlayer(
       body: 'Your keep stands. Collect resources, train troops, and prepare for war.',
     },
   })
+
+  // 9) Power is DERIVED from the state just created — never a hand-set value.
+  await recalculatePlayerPower(tx, player.id)
 
   return { playerId: player.id, cityId: city.id }
 }

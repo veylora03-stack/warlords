@@ -37,7 +37,7 @@
 
 ---
 
-## PHASE 1a — Project Foundation ✅ (current)
+## PHASE 1a — Project Foundation ✅
 
 | # | Task | Status |
 |---|---|---|
@@ -57,7 +57,7 @@
 
 ---
 
-## PHASE 2 — Database Foundation ✅ (current)
+## PHASE 2 — Database Foundation ✅
 
 | # | Task | Status |
 |---|---|---|
@@ -74,7 +74,7 @@
 
 ---
 
-## PHASE 3 — Telegram Authentication ✅ (current)
+## PHASE 3 — Telegram Authentication ✅
 
 | # | Task | Status |
 |---|---|---|
@@ -93,9 +93,28 @@
 
 ---
 
+## PHASE 4 — Player System ✅ (current)
+
+| # | Task | Status |
+|---|---|---|
+| 4.1 | Data-driven XP/Level curve `src/lib/game/config/leveling.ts` — tuning surface `LEVELING {maxLevel: 30, baseXp: 100, growthBps: 1200}` (12%/level, floored integer compounding); derived once at module load: `XP_REQUIRED_PER_LEVEL`, `CUMULATIVE_XP_BY_LEVEL`, `MAX_TOTAL_XP`; pure `resolveLevelProgress` (level/xpIntoLevel/xpForNextLevel/progressBps) + `applyXpGain` (levelsGained/leveledUp/atMaxLevel, XP clamped at cap — never wasted) | ✅ |
+| 4.2 | Power-from-state `src/lib/game/config/power.ts` + `services/power.service.ts` — all-bps/integer weights (unit attackBps 10000 · defenseBps 10000 · healthBps 5000 · tierBonusBps 2000; per-type `buildingWeight` for the 17 building types; per-branch `techBranchWeight`); pure `computeUnitBasePower/StackPower/computeBuildingPower/computeTechPower`; `computePlayerPower` aggregates army stacks × DB unit catalog + buildings × levels + researched tech levels (catalogs read from the seeded DB mirror, never config directly); `recalculatePlayerPower` is the ONLY write path for `Player.power` — clients can never set/push/adjust it, a tampered column heals on the next recalculation | ✅ |
+| 4.3 | Statistics catalog + service `src/lib/game/config/stats.ts` + `services/stats.service.ts` — 12 typed counters in 3 categories (COMBAT: battlesWon/battlesLost/attacksLaunched/defensesWon/unitsTrained/unitsLost · ECONOMY: resourcesCollected/resourcesPlundered/resourcesSpent · PROGRESSION: buildingsConstructed/technologiesResearched/questsCompleted); read path normalizes any stored JSON against the catalog (unknown dropped, missing zero-filled, non-conforming zeroed); write path `recordPlayerStats` is append-only positive-integer deltas (VALIDATION_ERROR for unknown keys, INVALID_AMOUNT otherwise) — counters never decrease | ✅ |
+| 4.4 | Lazy-tick energy `src/lib/game/config/energy.ts` + `services/energy.service.ts` — `ENERGY {max: 100, regenAmount: 1, regenIntervalSec: 300}`; `computeEnergyState` resolves whole elapsed ticks, preserves partial-tick progress by advancing the anchor exactly by consumed intervals, re-anchors at the cap; `syncPlayerEnergy` persists ONLY when changed (common case = one SELECT) and exposes `nextRegenAtMs` for UI countdowns | ✅ |
+| 4.5 | Race-safe registration `services/player-registration.service.ts` — `ensurePlayer(tx, …)` idempotent (existing players short-circuit; unique-race loser re-attaches to the winner's row) + `sanitizePlayerName` (control-char strip, 32-char cap); `withRegistrationLock` in-process promise-chain mutex serializes registration txs; `withWriteRetry` bounded backoff (25/50/100/200/400 ms) for Prisma P2002 unique races + transient SQLite write contention (P1008/BUSY); generous `REGISTRATION_TX_OPTIONS {maxWait: 10s, timeout: 20s}`; `runRegistrationTransaction` composes lock → retry → tx. `issueSession` (auth) wraps the WHOLE login transaction the same way — a retried or concurrent login can never fork a second player | ✅ |
+| 4.6 | Routes: `GET /api/v1/player/profile` · `GET /api/v1/player/statistics` · `GET /api/v1/player/state` — protected by the new `requirePlayer` guard (`requireAuth` + player-presence; session without a bootstrapped player → `PLAYER_NOT_FOUND` 404); BigInt amounts (xp/power/honor/gems/wallet) serialize as strings; **power is computed FRESH on every projection**, energy lazily synced before projection; `/api` index lists the player surface | ✅ |
+| 4.7 | Bootstrap hardening + frontend — `bootstrapPlayer` now zero-fills `Player.stats` from the typed catalog and calls `recalculatePlayerPower` as its final step (initial power is derived, never hand-set); `src/features/player/` slice (exact DTO mirror types + 3 TanStack Query hooks, 401 → `null` anonymous state); Player System console card renders live profile/statistics/state data | ✅ |
+| 4.8 | Tests: 35 new unit (leveling 13 · power 10 — incl. the exact documented starter power 3810 · energy 6 · stats 6) + 24 new integration through real route handlers + DB (authorization 401s on all 3 paths; first-login chain exact starter values incl. power **3810 = 2130 army + 1680 buildings**; duplicate registration idempotency; 6× parallel `ensurePlayer` and 5× parallel first logins converging on ONE player; XP grants → level-up `RANK_CHANGE` outbox notification + cap clamp; `INVALID_AMOUNT` rejections; statistics write validation; energy lazy regen with partial-tick carry + cap) + 3 e2e player-smoke over live HTTP (401 guard contract + full exchange → profile → state → statistics flow) | ✅ |
+
+**Starter power baseline (asserted by unit + integration tests):** 20 militia + 10 archers → army **2130**; 17 starter buildings at level 1 → **1680**; total **3810** (technologies 0).
+
+**Quality gate:** lint ✓ · typecheck ✓ · format ✓ · unit 119 ✓ · integration 40 ✓ · e2e 10 ✓ · build ✓ · browser-verified.
+
+---
+
 ## Phase plan (original numbering — superseded by user-assigned phases above; contract tables are the source of truth)
 
-> Deferred from the original auth proposal, still open: Mini App shell v0 (boot → initData handshake → HUD skeleton) and `GET /api/v1/player/me` projection — they land with the UI/economy phases below.
+> Deferred from the original auth proposal, still open: Mini App shell v0 (boot → initData handshake → HUD skeleton). The `GET /api/v1/player/me` projection landed in Phase 4 as the three `/api/v1/player/{profile,statistics,state}` endpoints instead.
 
 ## PHASE 2 — Player, Resources & Economy Core (M)
 

@@ -77,11 +77,27 @@ All auth routes share the auth rate-limit group (10/min per IP, enforced before 
 
 Failure codes: `INVALID_INIT_DATA` 401 (with `details.reason`), `UNAUTHORIZED` 401, `SESSION_EXPIRED` 401, `SESSION_REVOKED` 401, `BANNED` 403, `AUTH_NOT_CONFIGURED` 503, `RATE_LIMITED` 429, `NOT_FOUND` 404 (dev-impersonate in production) — full map in AUTHENTICATION.md §5.
 
-### 2.3 Player — Phase 2
+### 2.3 Player — Phase 4 ✅ (profile surface implemented)
+
+Auth = session credential (see §1.3): `Authorization: Bearer` wins, else the `wl_session` cookie — enforced by the `requirePlayer` guard (`requireAuth` + player-presence). Reads accept no client input beyond the authenticated player id.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/player/me` | Full own projection: profile, wallet, energy, timers (after reconcile) |
+| GET | `/api/v1/player/profile` | Progression snapshot: level + XP-curve position (`xpIntoLevel`, `xpForNextLevel`, `levelProgressBps` — derived from the data-driven curve), honor, reputation, season points, city, clan stub, **lazily-regenerated energy** (`energy`, `energyMax`, `energyNextRegenAtMs`) and **freshly computed power** (`power` + `powerBreakdown{units, buildings, technologies}`) |
+| GET | `/api/v1/player/statistics` | Lifetime counters from the typed catalog (`config/stats.ts` — 12 keys, COMBAT/ECONOMY/PROGRESSION), normalized server-side (unknown dropped, missing zero-filled) |
+| GET | `/api/v1/player/state` | Full Mini App bootstrap payload in one call: `profile` + `wallet` (gold/wood/iron/food/crystal) + capital `city` + `buildingCount` + `army` roster |
+
+Serialization & freshness notes:
+- BigInt amounts (`xp`, `power`, `honor`, `gems`, wallet balances) are serialized as **strings** — clients do display math only.
+- `power` is **computed fresh from real state (army × catalog + buildings + technologies) on every request** — never read from the cached `Player.power` column, never client-supplied.
+- Energy regen is resolved lazily on read (lazy-tick): whole ticks credited, partial tick carried, cap never accumulates.
+
+Failure codes: `UNAUTHORIZED` 401 (missing/invalid/expired/revoked session), `PLAYER_NOT_FOUND` 404 (valid session whose user has no bootstrapped player — a server-side inconsistency, not a client-fixable state).
+
+Still planned (original Phase 2 catalog, not yet implemented):
+
+| Method | Path | Purpose |
+|---|---|---|
 | GET | `/api/v1/player/:id` | Public profile (no wallet detail, no army detail) |
 | GET | `/api/v1/player/me/transactions?resource=&cursor=` | Personal ledger (paginated) |
 

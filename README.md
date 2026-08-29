@@ -3,8 +3,9 @@
 A persistent, **server-authoritative** MMO strategy game delivered as a **Telegram Bot + Mini App + REST API**.
 Build a city, raise armies, collect commanders, fight deterministic battles, conquer territories, climb leaderboards.
 
-> Status: **Phase 3 — Telegram Authentication: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 initData HMAC + session JWT + auth endpoints + rate limiting)
+> Status: **Phase 4 — Player System: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 Telegram auth · Phase 4 XP/Level curve · derived power · statistics · lazy energy · Profile APIs)
 > Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+> Live API: `/api/health` · `POST /api/v1/auth/telegram` · `GET /api/v1/auth/me` · `POST /api/v1/auth/logout` · `POST /api/v1/auth/dev-impersonate` *(dev only)* · `GET /api/v1/player/profile` · `GET /api/v1/player/statistics` · `GET /api/v1/player/state` — machine-readable index at `GET /api`
 
 ---
 
@@ -52,7 +53,7 @@ bun run dev                  # http://localhost:3000
 | `bun run build` | Typechecked production build (standalone output) |
 | `bun run start` | Serve the production build (`PORT` env respected) |
 | `bun run test` | Unit tests (`bun test tests/unit/`) |
-| `bun run test:integration` | Auth flow integration tests (routes + DB, no HTTP server) |
+| `bun run test:integration` | Integration tests (auth + player system; routes + DB, no HTTP server) |
 | `bun run test:e2e` | API smoke tests against a running server (`E2E_BASE_URL` optional) |
 | `bun run lint` | ESLint incl. module import-boundary rules |
 | `bun run typecheck` | `tsc --noEmit` (strict) |
@@ -84,18 +85,18 @@ src/
 │   ├── health/      reference backend module (service + types + barrel)
 │   ├── db.ts        Prisma singleton
 │   └── game/
-│       ├── config/  data-driven balance (units · techs · quests · items · starter kit)
-│       ├── services/ transactional application services (player bootstrap)
+│       ├── config/  data-driven balance (units · techs · quests · items · starter kit · leveling · power · energy · stats)
+│       ├── services/ transactional application services (bootstrap · registration · progression · power · stats · energy · player state)
 │       └── types/   domain contracts
 ├── features/        feature slices (TanStack Query hooks + types) — UI talks to /api only
 ├── stores/          Zustand UI state slices
 ├── components/      ui (shadcn) · game panels (later phases)
 ├── types/           shared DTO re-exports (type-only, client-safe)
-└── app/             page shell · providers · /api adapters (incl. /api/v1/auth/*)
+└── app/             page shell · providers · /api adapters (incl. /api/v1/auth/* · /api/v1/player/*)
 tests/
-├── unit/            bun test — telegram initData, auth jwt/rate-limit, logger, errors, env, route validation, config invariants
-├── integration/     auth flow tests (routes + DB, real secrets, no HTTP server)
-└── e2e/             API smoke against a real server
+├── unit/            bun test — telegram initData, auth jwt/rate-limit, logger, errors, env, route validation, config invariants, game systems (leveling · power · energy · stats)
+├── integration/     auth + player-system flow tests (routes + DB, real secrets, no HTTP server)
+└── e2e/             API smoke against a real server (api · auth · player)
 ```
 
 ## Principles
@@ -103,5 +104,5 @@ tests/
 1. **Never trust the client** — every resource, battle result, reward and cooldown is computed server-side.
 2. **Ledger economy** — every resource delta is appended to `resource_transactions` with `balanceAfter`; negative balances are structurally impossible.
 3. **Deterministic battles** — `(seed, configVersion, inputs)` fully replays any engagement.
-4. **Data-driven balance** — unit/building/tech/quest numbers live in typed config, never hard-coded in logic.
+4. **Data-driven balance** — unit/building/tech/quest numbers and the progression systems (XP curve, power weights, energy tunables, stat catalog) live in typed config, never hard-coded in logic.
 5. **Working software over claims** — every phase exits through lint + typecheck + build + tests + runtime verification.

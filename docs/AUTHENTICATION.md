@@ -9,7 +9,7 @@
 | Concept | Storage | Rule |
 |---|---|---|
 | **Identity** | `users.telegramId` (unique, int64-as-string) | username is display-only, NEVER identity |
-| **Game persona** | `players` (1:1 user) | bootstrapped in the SAME tx as the session on first login |
+| **Game persona** | `players` (1:1 user) | bootstrapped via `ensurePlayer` in the SAME tx as the session on first login (idempotent, race-safe — see §2) |
 | **Session** | JWT HS256 **+ `auth_sessions` row** (sha256 tokenHash, revocable), TTL `SESSION_TTL_SECONDS` (default 7d), sliding refresh within 48h of expiry | cookie `wl_session` HttpOnly+SameSite=Lax+Path=/ (Secure in production) or `Authorization: Bearer` |
 | **Roles** | `users.role` ∈ USER·ADMIN·SUPERADMIN | `role` in the JWT is observability ONLY — role/ban are re-read from the DB on EVERY request |
 
@@ -32,7 +32,7 @@ sequenceDiagram
     S->>S: calc = HMAC_SHA256(key, data_check_string)
     S->>S: constant-time compare with `hash` → fail = INVALID_INIT_DATA 401
     S->>S: auth_date freshness ≤ TELEGRAM_AUTH_MAX_AGE_SECONDS (skew 300s)? user JSON shape valid?
-    S->>DB: ONE tx: upsert users (by telegramId) → ban check (BANNED 403) → delete expired sessions → replay resolution → session row → bootstrapPlayer on first login (player+wallet+ledger+city+17 buildings+army+quests+welcome notification)
+    S->>DB: ONE tx: upsert users (by telegramId) → ban check (BANNED 403) → delete expired sessions → replay resolution → session row → ensurePlayer (idempotent + race-safe) → bootstrapPlayer on first login (player+wallet+ledger+city+17 buildings+army+quests+welcome notification+initial power)
     S->>S: JWT HS256 { sub: userId, sid: auth_sessions.id, role } — SESSION_TTL_SECONDS
     S-->>C: 200 { token (Bearer), replayed, user, player, session } + Set-Cookie wl_session
     C->>C: seed session store → boot shell
@@ -43,6 +43,7 @@ Notes:
 - Verification failures → `INVALID_INIT_DATA` (401) with `details.reason` (`empty|too_long|missing_hash|missing_auth_date|invalid_auth_date|invalid_hash|auth_date_in_future|expired|missing_user|invalid_user`). Stale `auth_date` → same code with `reason: expired` (client re-opens the app to refresh).
 - **Replay policy:** a byte-identical initData re-attaches to the SAME `auth_sessions` row (unique `initDataHash`) and **rotates the token hash** — no second session can be farmed, the old token is invalidated immediately, and legitimate network retries never lock users out (`replayed: true` in the response). A **fresh** initData (new `auth_date`) mints a new session.
 - Sliding refresh: protected requests with `expiresAt - now < 48h` (`SESSION_REFRESH_THRESHOLD_SECONDS`) re-issue the token (Set-Cookie + `refreshed.token` on `/auth/me`).
+- **First-login registration (Phase 4):** bootstrap runs through `ensurePlayer` (`game/services/player-registration.service.ts`) — idempotent (existing players short-circuit; a P2002 unique-race loser re-attaches to the winner's row) inside a registration-locked transaction (`withRegistrationLock` in-process mutex + `withWriteRetry` bounded retry + `REGISTRATION_TX_OPTIONS {maxWait: 10s, timeout: 20s}`). `Player.userId` UNIQUE + this wrapper mean a retried or concurrent login can never fork a second player.
 - Every subsequent request: `requireAuth` → Bearer header, else cookie → JWT verify → session row (token-hash match + `revokedAt` + expiry) → ban check from DB (`users.isBanned`, `banExpiresAt` for temp bans). There is **no Next.js edge `middleware.ts`** — the edge runtime cannot run Prisma and the ban check must hit the DB on every request; the guard composes into each route.
 
 ## 3. Flow B — Dev Impersonation (non-production ONLY, implemented)

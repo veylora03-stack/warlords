@@ -248,7 +248,7 @@ strings, money is BigInt, JSON columns are PG `jsonb`-ready).
 | Table | Prisma model | Notes |
 |---|---|---|
 | users | `User` | Telegram identity, ban state, role |
-| players | `Player` | progression + premium/action currencies |
+| players | `Player` | progression + premium/action currencies; `stats` JSON governed by the typed catalog (`config/stats.ts`); `power` is a derived cache (see Phase 4 semantics below) |
 | cities | `City` | unique (x,y) capital |
 | buildings | `Building` | unique (cityId,type); timer columns for lazy-tick upgrades |
 | resources | `ResourceWallet` | per-player balance cache — ledger is the truth |
@@ -301,12 +301,42 @@ soft-disabled via `isActive`); optional soft references → `SetNull`. Every
 mutable table carries `updatedAt` (`@updatedAt`); append-only tables carry
 `createdAt` only.
 
+**Player-row semantics (`players`, Phase 4 — no new tables).** Phase 4 added no
+schema; it pinned down how two existing columns are governed:
+
+- `players.stats` (Json) is now a **typed counter store**: the single source of
+  truth is the catalog in `src/lib/game/config/stats.ts` (12 append-only
+  counters — battlesWon…questsCompleted). The read path normalizes any stored
+  blob against the catalog (unknown keys dropped, missing keys zero-filled,
+  non-conforming values zeroed); the write path (`recordPlayerStats`) accepts
+  only positive-integer deltas for catalog keys. Bootstrap zero-fills the record
+  (`emptyPlayerStats()`), so the column is always a complete, conforming record.
+- `players.power` (BigInt) is a **derived cache**, not state. It is written ONLY
+  by `recalculatePlayerPower` (`power.service.ts`), which recomputes from real
+  server-owned rows (player_units joined with the unit catalog, buildings,
+  researched player_technologies) using the bps weights in
+  `config/power.ts`. Clients have no write path; a tampered value heals on the
+  next recalculation, and the profile/state endpoints return the freshly
+  computed value. Bootstrap computes the initial power as its final step.
+
+**Registration concurrency semantics (Phase 4).** `Player.userId` UNIQUE is the
+hard guarantee that one user owns at most one player. On top of it, first login
+runs through `ensurePlayer` (`player-registration.service.ts`): idempotent
+(existing players short-circuit to one read), race-safe (a P2002 unique-race
+loser re-attaches to the winner's row), name sanitized server-side. The whole
+login transaction is wrapped by an in-process registration lock
+(`withRegistrationLock`) + bounded retry (`withWriteRetry`: P2002 races and
+transient SQLite write contention P1008/BUSY) under generous transaction bounds
+(`REGISTRATION_TX_OPTIONS {maxWait: 10s, timeout: 20s}`) — retried or parallel
+Mini App logins converge on exactly one player and can never fork a second one.
+
 **Seeded transaction pattern (sensitive operations).** `bootstrapPlayer(tx, …)`
 (`src/lib/game/services/player-bootstrap.service.ts`) creates the complete
-player state — player, wallet, ledger faucet rows, city, 17 starter buildings,
-starter army, starter quests, welcome notification — inside ONE
-`db.$transaction`. It is consumed by the seed and by the Phase 3 auth flow
-(first login), so user, session and full player state commit atomically.
+player state — player (with zero-filled typed stats), wallet, ledger faucet
+rows, city, 17 starter buildings, starter army, starter quests, welcome
+notification, and finally the initial power recalculation — inside ONE
+`db.$transaction`. It is consumed by the seed and by the auth flow (first login
+via `ensurePlayer`), so user, session and full player state commit atomically.
 All future money-touching services follow the same interactive-transaction
 pattern with ledger appends and `balanceAfter` chain inside the tx boundary.
 

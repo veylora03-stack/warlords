@@ -16,6 +16,7 @@
 
 import { authenticate } from './session.service'
 import { resolveAuthConfig, type AuthConfig } from './session.config'
+import { AppError } from '@/lib/api/errors'
 import type { AuthPrincipal, RefreshedSession } from './session.types'
 
 export interface RequireAuthOptions {
@@ -36,4 +37,25 @@ export async function requireAuth(
 ): Promise<RequireAuthResult> {
   const cfg = options.config ?? resolveAuthConfig()
   return authenticate(request, cfg, { refresh: options.refresh })
+}
+
+export interface RequirePlayerResult {
+  principal: AuthPrincipal & { player: NonNullable<AuthPrincipal['player']> }
+  refreshed?: RefreshedSession
+}
+
+/**
+ * Auth + player-presence gate for the Player System routes. A session
+ * without a bootstrapped player is a server-side inconsistency — surfaced
+ * as PLAYER_NOT_FOUND (404), never as a client-fixable state.
+ */
+export async function requirePlayer(
+  request: Request,
+  options: RequireAuthOptions = {},
+): Promise<RequirePlayerResult> {
+  const { principal, refreshed } = await requireAuth(request, options)
+  if (!principal.player) {
+    throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
+  }
+  return { principal: principal as RequirePlayerResult['principal'], refreshed }
 }

@@ -7,6 +7,6 @@
  */
 
 export const APP_NAME = 'WARLORDS'
-export const APP_VERSION = '0.4.0-phase3'
-export const APP_PHASE = 3
-export const APP_PHASE_LABEL = 'Phase 3 — Telegram Authentication'
+export const APP_VERSION = '0.5.0-phase4'
+export const APP_PHASE = 4
+export const APP_PHASE_LABEL = 'Phase 4 — Player System'

@@ -36,5 +36,5 @@ export type {
   RefreshedSession,
   ExchangeInput,
 } from './session.types'
-export { requireAuth } from './guard'
-export type { RequireAuthOptions, RequireAuthResult } from './guard'
+export { requireAuth, requirePlayer } from './guard'
+export type { RequireAuthOptions, RequireAuthResult, RequirePlayerResult } from './guard'
