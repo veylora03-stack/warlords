@@ -27,6 +27,17 @@ import {
   useUpgradeBuildingMutation,
   type CityBuildingView,
 } from '@/features/city'
+import {
+  UNIT_CLASS_ICONS,
+  UNIT_CLASS_LABELS,
+  useArmyCatalogQuery,
+  useArmyQuery,
+  useCancelTrainingMutation,
+  useCompleteTrainingMutation,
+  useRecruitMutation,
+  type CatalogUnitView,
+  type TrainingQueueItemView,
+} from '@/features/army'
 import { useUiStore } from '@/stores/ui.store'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -65,8 +76,12 @@ const PHASES: PhaseRow[] = [
     name: 'City & Building System (17 buildings · server-side upgrades · construction timers)',
     state: 'done',
   },
-  { id: '07?', name: 'Army & Training (proposed)', state: 'next' },
-  { id: '—', name: 'Battle Engine', state: 'planned' },
+  {
+    id: '07',
+    name: 'Army & Unit System (11 units · data-driven counters · recruitment queue)',
+    state: 'done',
+  },
+  { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
   { id: '—', name: 'Quests, Ranking & World', state: 'planned' },
   { id: '—', name: 'Telegram Bot', state: 'planned' },
   { id: '—', name: 'Mini App UI (full client)', state: 'planned' },
@@ -76,37 +91,41 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'Building catalog — 17 types · per-level cost/duration/requirements/effects',
-    file: 'src/lib/game/config/buildings.ts',
+    label: 'Unit roster — 11 units · 4 classes · attack/defense/health/speed/upkeep/cost/time',
+    file: 'src/lib/game/config/units.ts',
   },
   {
-    label: 'City service — transactional upgrades, double-spend-proof construction',
-    file: 'src/lib/game/services/city.service.ts',
+    label: 'Data-driven counters — Infantry ▸ Cavalry ▸ Ranged ▸ Infantry (+ siege fear)',
+    file: 'strongAgainst / weakAgainst (bps)',
   },
   {
-    label: 'Ledger-driven costs — every debit carries BUILDING_UPGRADE + building ref',
-    file: 'spendResources (reason: BUILDING_UPGRADE)',
+    label: 'Army service — transactional recruitment, double-spend-proof debits',
+    file: 'src/lib/game/services/army.service.ts',
   },
   {
-    label: 'Construction lifecycle — start/finish timers, server clock authority',
-    file: 'IDLE → CONSTRUCTING → COMPLETABLE → IDLE',
+    label: 'Ledger-driven costs — every debit carries UNIT_TRAINING + queue ref',
+    file: 'spendResources (reason: UNIT_TRAINING)',
   },
   {
-    label: 'Race safety — wallet mutex + queue-slot check + conditional claim guard',
-    file: 'startBuildingUpgrade / finishBuildingUpgrade',
+    label: 'FIFO recruitment queue — depth 5 · batch cap 1000 · locked paid windows',
+    file: 'ARMY_TRAINING (config/army.ts)',
   },
   {
-    label: 'Live effects — power recalculated on completion · production · storage',
-    file: 'recalculatePlayerPower + city view aggregates',
+    label: 'Lifecycle — claim against server clock · policy refund · queue re-walk',
+    file: 'TRAINING → COMPLETABLE → DONE / CANCELLED',
   },
   {
-    label: 'APIs — GET /city · GET /city/buildings · POST upgrade · POST finish',
-    file: 'src/app/api/v1/city/**',
+    label: 'Building gates — Barracks/Archer Camp/Stable/Armory level + real speed bps',
+    file: 'trainingBuilding + requiredBuildingLevel',
+  },
+  {
+    label: 'APIs — GET /army · GET /army/catalog · POST train · POST complete · POST cancel',
+    file: 'src/app/api/v1/army/**',
   },
   {
     label:
-      'All scenarios tested — upgrade flow · insufficient · queue · prereqs · max level · concurrent double-spend · rollback · unauthorized',
-    file: 'tests/integration/city/',
+      'All scenarios tested — recruit · insufficient · queue · completion · concurrent · invalid unit · negative quantity · unauthorized',
+    file: 'tests/integration/army/',
   },
 ]
 
@@ -309,6 +328,131 @@ function CityBuildingRow({
   )
 }
 
+interface ArmyQueueRowProps {
+  item: TrainingQueueItemView
+  position: number
+  nowTick: number
+  disabled: boolean
+  onComplete: () => void
+  onCancel: () => void
+}
+
+/** One recruitment queue row: FIFO position, live countdown, claim/cancel actions. */
+function ArmyQueueRow({
+  item,
+  position,
+  nowTick,
+  disabled,
+  onComplete,
+  onCancel,
+}: ArmyQueueRowProps) {
+  const ready = item.status === 'COMPLETABLE'
+  const countdown =
+    item.status === 'TRAINING' && Date.parse(item.completesAt) > nowTick
+      ? formatCountdown(item.completesAt, nowTick)
+      : item.status === 'TRAINING'
+        ? formatCountdown(item.completesAt, nowTick) // clamped to 0s by the formatter
+        : null
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate">
+          <span className="text-zinc-600">#{position}</span>{' '}
+          <span className="font-semibold text-zinc-200">
+            {item.count}× {item.unitName}
+          </span>{' '}
+          <span className="text-zinc-600">batch</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {ready ? (
+            <Badge className="bg-emerald-500/15 border border-emerald-500/40 px-1.5 py-0 text-[10px] text-emerald-300">
+              READY
+            </Badge>
+          ) : (
+            <Badge className="bg-amber-500/15 border border-amber-500/40 px-1.5 py-0 text-[10px] text-amber-300">
+              ⏳ {countdown ?? '…'}
+            </Badge>
+          )}
+          {ready ? (
+            <Button
+              size="sm"
+              className="h-7 bg-emerald-600 px-2 text-[10px] font-bold text-zinc-950 hover:bg-emerald-500"
+              disabled={disabled}
+              onClick={onComplete}
+            >
+              CLAIM
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 border-red-500/40 bg-red-500/10 px-2 text-[10px] font-bold text-red-400 hover:bg-red-500/20"
+            disabled={disabled}
+            onClick={onCancel}
+            aria-label={`Cancel ${item.count}× ${item.unitName}`}
+          >
+            CANCEL
+          </Button>
+        </span>
+      </div>
+    </div>
+  )
+}
+
+interface ArmyUnitRowProps {
+  unit: {
+    unitId: string
+    name: string
+    class: string
+    tier: number
+    count: number
+    attack: number
+    defense: number
+    health: number
+    speed: number
+    foodUpkeep: number
+    carryCapacity: number
+  }
+  catalog: CatalogUnitView | undefined
+}
+
+/** One roster row: owned count, stats, upkeep and training gate/cost preview. */
+function ArmyUnitRow({ unit, catalog }: ArmyUnitRowProps) {
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate">
+          <span aria-hidden>{UNIT_CLASS_ICONS[unit.class] ?? '⚔️'}</span>{' '}
+          <span className="font-semibold text-zinc-200">{unit.name}</span>{' '}
+          <span className="text-[10px] text-zinc-500">
+            T{unit.tier} · {UNIT_CLASS_LABELS[unit.class] ?? unit.class}
+          </span>
+        </span>
+        <span
+          className={`shrink-0 font-bold ${unit.count > 0 ? 'text-amber-400' : 'text-zinc-600'}`}
+        >
+          ×{unit.count.toLocaleString('en-US')}
+        </span>
+      </div>
+      <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+        <span className="min-w-0 text-[10px] text-zinc-500">
+          atk {unit.attack} · def {unit.defense} · hp {unit.health} · spd {unit.speed} · upkeep{' '}
+          {unit.foodUpkeep}/h · carry {unit.carryCapacity}
+        </span>
+        {catalog ? (
+          <span className="min-w-0 text-right text-[10px] [overflow-wrap:anywhere]">
+            <span className="text-zinc-500">
+              {catalog.trainingBuildingName} lv{catalog.requiredBuildingLevel}:
+            </span>{' '}
+            <span className="text-zinc-400">{formatCost(catalog.trainingCost)}</span>
+            <span className="text-zinc-600"> · {catalog.trainingTimeSec}s</span>
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export default function WarlordsConsole() {
   const autoRefresh = useUiStore((s) => s.autoRefresh)
   const toggleAutoRefresh = useUiStore((s) => s.toggleAutoRefresh)
@@ -324,22 +468,46 @@ export default function WarlordsConsole() {
   const { data: wallet } = useResourcesQuery({ enabled: signedIn })
   const { data: ledger } = useTransactionsQuery({ enabled: signedIn, limit: 8 })
   const { data: city } = useCityQuery({ enabled: signedIn })
+  const { data: army } = useArmyQuery({ enabled: signedIn })
+  const { data: armyCatalog } = useArmyCatalogQuery({ enabled: signedIn })
 
   const upgradeBuilding = useUpgradeBuildingMutation()
   const finishBuilding = useFinishBuildingMutation()
+  const recruit = useRecruitMutation()
+  const completeTraining = useCompleteTrainingMutation()
+  const cancelTraining = useCancelTrainingMutation()
 
-  // Cosmetic 1s tick so construction countdowns advance (server clock stays
-  // the authority — it decides whether a finish claim is accepted).
+  // Recruitment form state — the server owns the real quantity ceiling; the
+  // input is clamped defensively to a sane positive range before submit.
+  const [trainUnitId, setTrainUnitId] = useState('swordsman')
+  const [trainCount, setTrainCount] = useState('5')
+  const trainCountNum = Number.parseInt(trainCount, 10)
+  const trainCountValid =
+    Number.isInteger(trainCountNum) && trainCountNum >= 1 && trainCountNum <= 10_000
+
+  // Cosmetic 1s tick so construction/training countdowns advance (server clock
+  // stays the authority — it decides whether a claim is accepted).
   const [nowTick, setNowTick] = useState(() => Date.now())
   const hasActiveConstruction = (city?.construction.activeCount ?? 0) > 0
+  const hasActiveTraining = (army?.training.activeCount ?? 0) > 0
   useEffect(() => {
-    if (!hasActiveConstruction) return
+    if (!hasActiveConstruction && !hasActiveTraining) return
     const timer = setInterval(() => setNowTick(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [hasActiveConstruction])
+  }, [hasActiveConstruction, hasActiveTraining])
 
-  const anyMutationPending = upgradeBuilding.isPending || finishBuilding.isPending
-  const mutationError = upgradeBuilding.error ?? finishBuilding.error
+  const anyMutationPending =
+    upgradeBuilding.isPending ||
+    finishBuilding.isPending ||
+    recruit.isPending ||
+    completeTraining.isPending ||
+    cancelTraining.isPending
+  const mutationError =
+    upgradeBuilding.error ??
+    finishBuilding.error ??
+    recruit.error ??
+    completeTraining.error ??
+    cancelTraining.error
   const mutationErrorDetail = (
     mutationError as (Error & { details?: { missing?: string[] } }) | null
   )?.details?.missing
@@ -369,7 +537,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 6 COMPLETE
+                PHASE 7 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -887,6 +1055,183 @@ export default function WarlordsConsole() {
             </CardContent>
           </Card>
 
+          {/* Army & Unit System — live from /api/v1/army with train/complete/cancel mutations */}
+          <Card className="border-zinc-800 bg-zinc-900/60 md:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
+                Army &amp; Unit System
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    army
+                      ? army.training.activeCount > 0
+                        ? 'text-amber-400'
+                        : 'text-emerald-400'
+                      : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      army
+                        ? army.training.activeCount > 0
+                          ? 'animate-pulse bg-amber-400'
+                          : 'bg-emerald-400'
+                        : 'bg-zinc-600'
+                    }`}
+                  />
+                  {army
+                    ? `${army.totals.unitCount.toLocaleString('en-US')} UNITS · ${army.training.activeCount}/${army.training.queueSlots} QUEUE`
+                    : signedIn
+                      ? 'NO ARMY'
+                      : 'SIGN IN TO VIEW'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 font-mono text-xs text-zinc-400">
+              {army ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        standing army
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {army.totals.unitCount.toLocaleString('en-US')} units · carry{' '}
+                        {army.totals.carryCapacity.toLocaleString('en-US')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        food upkeep / h
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {army.totals.upkeepFood.toLocaleString('en-US')} Fd
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        training speed (bps)
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {(
+                          [
+                            ['BARRACKS', army.training.speedBps['BARRACKS']],
+                            ['ARCHER_CAMP', army.training.speedBps['ARCHER_CAMP']],
+                            ['STABLE', army.training.speedBps['STABLE']],
+                            ['ARMORY', army.training.speedBps['ARMORY']],
+                          ] as Array<[string, number | undefined]>
+                        )
+                          .filter(([, speed]) => speed !== undefined)
+                          .map(
+                            ([key, speed]) =>
+                              `${BUILDING_ICONS[key] ?? ''}${speed?.toLocaleString('en-US')}`,
+                          )
+                          .join(' · ')}
+                      </span>
+                    </div>
+                  </div>
+                  <Separator className="bg-zinc-800" />
+                  {/* Recruitment — the client sends ONLY a unit id + quantity;
+                      every cost/duration/gate decision is server-side. */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="train-unit" className="sr-only">
+                      Unit to train
+                    </label>
+                    <select
+                      id="train-unit"
+                      value={trainUnitId}
+                      onChange={(e) => setTrainUnitId(e.target.value)}
+                      className="h-8 rounded border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-200"
+                    >
+                      {army.units.map((u) => (
+                        <option key={u.unitId} value={u.unitId}>
+                          {UNIT_CLASS_ICONS[u.class] ?? ''} {u.name} (T{u.tier})
+                        </option>
+                      ))}
+                    </select>
+                    <label htmlFor="train-count" className="sr-only">
+                      Batch size
+                    </label>
+                    <input
+                      id="train-count"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={trainCount}
+                      onChange={(e) => setTrainCount(e.target.value)}
+                      className="h-8 w-20 rounded border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-200"
+                      aria-label="Units per batch"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-8 bg-amber-500 px-3 text-[10px] font-bold text-zinc-950 hover:bg-amber-400"
+                      disabled={anyMutationPending || !trainCountValid}
+                      onClick={() => recruit.mutate({ unitId: trainUnitId, count: trainCountNum })}
+                    >
+                      RECRUIT
+                    </Button>
+                    <span className="text-[10px] text-zinc-600">
+                      cost × time = queue window — debited atomically (UNIT_TRAINING)
+                    </span>
+                  </div>
+                  {mutationError ? (
+                    <p className="text-red-400" role="alert">
+                      {(mutationError as Error & { code?: string }).code ?? 'ERROR'}:{' '}
+                      {mutationError.message ?? 'army action failed'}
+                      {mutationErrorDetail && mutationErrorDetail.length > 0 ? (
+                        <span className="block text-[10px] text-red-400/80">
+                          {mutationErrorDetail.join(' · ')}
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
+                  {/* Live FIFO training queue */}
+                  {army.training.queue.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {army.training.queue.map((item, index) => (
+                        <ArmyQueueRow
+                          key={item.id}
+                          item={item}
+                          position={index + 1}
+                          nowTick={nowTick}
+                          disabled={anyMutationPending}
+                          onComplete={() => completeTraining.mutate(item.id)}
+                          onCancel={() => cancelTraining.mutate(item.id)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-zinc-500">training queue idle — recruit a batch above</p>
+                  )}
+                  {/* Roster — full active catalog with owned counts */}
+                  <div className="max-h-96 space-y-1.5 overflow-y-auto pr-1">
+                    {army.units.map((unit) => (
+                      <ArmyUnitRow
+                        key={unit.unitId}
+                        unit={unit}
+                        catalog={armyCatalog?.units.find((c) => c.id === unit.unitId)}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    Server-side recruitment only: the roster, costs, timers, counters and building
+                    gates come from the server catalog — the debit and the queue item commit in ONE
+                    transaction (ledger reason <span className="text-amber-400">UNIT_TRAINING</span>
+                    ). FIFO batches anchor behind the current tail; claims answer to the server
+                    clock; cancellation refunds by policy (100% before start · 50% once under way)
+                    and re-walks the queue. Unit counts have no client write path.
+                  </p>
+                </>
+              ) : (
+                <p className="leading-relaxed text-zinc-500">
+                  {signedIn
+                    ? 'Signed in but no army projection available — registration bootstraps the starter army (20 swordsmen · 10 archers).'
+                    : 'Anonymous — sign in to view the live roster and recruit troops.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -971,11 +1316,11 @@ export default function WarlordsConsole() {
           </CardContent>
         </Card>
 
-        {/* Phase 6 deliverables */}
+        {/* Phase deliverables */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 6 — City &amp; Building System Deliverables
+              Phase 7 — Army &amp; Unit System Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -993,10 +1338,11 @@ export default function WarlordsConsole() {
             <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="min-w-0 text-xs text-zinc-300 [overflow-wrap:anywhere]">
                 Quality gate — lint · typecheck · format · unit + integration + e2e tests ·
-                production build · upgrade/queue/prereq/double-spend/rollback/unauthorized green
+                production build ·
+                recruit/insufficient/queue/completion/concurrent/invalid/negative/unauthorized green
               </span>
               <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-400 [overflow-wrap:anywhere]">
-                catalog ✓ upgrades ✓ timers ✓ ledger ✓ tests ✓
+                roster ✓ counters ✓ queue ✓ ledger ✓ tests ✓
               </code>
             </div>
           </CardContent>
@@ -1007,7 +1353,7 @@ export default function WarlordsConsole() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
           <span>
-            WARLORDS Dev Console · Phase 6 · awaiting approval for Phase 7 (Army &amp; Training)
+            WARLORDS Dev Console · Phase 7 · awaiting approval for Phase 8 (Battle Engine)
           </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>

@@ -7,6 +7,6 @@
  */
 
 export const APP_NAME = 'WARLORDS'
-export const APP_VERSION = '0.7.0-phase6'
-export const APP_PHASE = 6
-export const APP_PHASE_LABEL = 'Phase 6 — City & Building System'
+export const APP_VERSION = '0.8.0-phase7'
+export const APP_PHASE = 7
+export const APP_PHASE_LABEL = 'Phase 7 — Army & Unit System'

@@ -47,8 +47,12 @@ async function seedCatalogs() {
         carryCapacity: u.carryCapacity,
         trainingCost: json(u.trainingCost),
         trainingTimeSec: u.trainingTimeSec,
+        trainingBuilding: u.trainingBuilding,
+        requiredBuildingLevel: u.requiredBuildingLevel,
         strongAgainst: json(u.strongAgainst),
+        weakAgainst: json(u.weakAgainst),
         description: u.description,
+        isActive: true,
       },
       update: {
         name: u.name,
@@ -62,10 +66,26 @@ async function seedCatalogs() {
         carryCapacity: u.carryCapacity,
         trainingCost: json(u.trainingCost),
         trainingTimeSec: u.trainingTimeSec,
+        trainingBuilding: u.trainingBuilding,
+        requiredBuildingLevel: u.requiredBuildingLevel,
         strongAgainst: json(u.strongAgainst),
+        weakAgainst: json(u.weakAgainst),
         description: u.description,
+        isActive: true,
       },
     })
+  }
+
+  // Soft-retire catalog rows that left the roster (e.g. the Phase 2 baseline
+  // militia/scout/light_cavalry): never hard-deleted (Restrict FKs), never
+  // trainable again — the roster in config is the single source of truth.
+  const rosterIds = new Set(UNITS.map((u) => u.id))
+  const retired = await prisma.unit.updateMany({
+    where: { id: { notIn: [...rosterIds] }, isActive: true },
+    data: { isActive: false },
+  })
+  if (retired.count > 0) {
+    log.info('retired units outside the roster', { count: retired.count })
   }
 
   for (const t of TECHNOLOGIES) {

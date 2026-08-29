@@ -17,10 +17,10 @@ import { UNITS } from '../../../src/lib/game/config/units'
 
 describe('computeUnitBasePower', () => {
   it('matches the documented formula on a known unit', () => {
-    // Militia: attack 10, defense 15, health 100, tier 1.
-    // statPower = 10*10000 + 15*10000 + 100*5000 = 750000 → floor(750000*10000/1e8) = 75
-    const militia = UNITS.find((u) => u.id === 'militia')!
-    expect(computeUnitBasePower(militia)).toBe(75)
+    // Swordsman (T1): attack 24, defense 32, health 160.
+    // statPower = 24*10000 + 32*10000 + 160*5000 = 1360000 → floor(1360000*10000/1e8) = 136
+    const swordsman = UNITS.find((u) => u.id === 'swordsman')!
+    expect(computeUnitBasePower(swordsman)).toBe(136)
   })
 
   it('scales with tier through the configured bonus', () => {
@@ -82,11 +82,12 @@ describe('computeTechPower', () => {
 })
 
 describe('starter-kit sanity (anti-tamper baseline)', () => {
-  it('produces the exact documented starter power: 3810', () => {
-    // Starter army: 20 militia + 10 archers; starter buildings: 17 types at level 1.
+  it('produces the exact documented starter power: 5030', () => {
+    // Starter army (Phase 7 roster): 20 swordsmen + 10 archers; starter
+    // buildings: 17 types at level 1.
     const armyPower =
       computeUnitStackPower(
-        { attack: 10, defense: 15, health: 100, tier: 1 }, // militia
+        { attack: 24, defense: 32, health: 160, tier: 1 }, // swordsman
         20,
       ) +
       computeUnitStackPower(
@@ -97,8 +98,8 @@ describe('starter-kit sanity (anti-tamper baseline)', () => {
       (sum, type) => sum + computeBuildingPower(type, 1),
       0,
     )
-    expect(armyPower).toBe(2130)
+    expect(armyPower).toBe(3350)
     expect(buildingsPower).toBe(1680)
-    expect(armyPower + buildingsPower).toBe(3810) // asserted identically by integration tests
+    expect(armyPower + buildingsPower).toBe(5030) // asserted identically by integration tests
   })
 })

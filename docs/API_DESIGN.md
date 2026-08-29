@@ -138,13 +138,17 @@ Still planned (not yet implemented):
 
 Path params: dynamic `[type]` segments arrive through the extended `defineRoute` (`params` Zod schema, Next.js Promise params). Queue capacity = `constructionQueueSlots(townHallLevel)` (1 slot; +1 at TH 10 — config-driven).
 
-### 2.5 Army — Phase 4
+### 2.5 Army — Phase 7 (IMPLEMENTED)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/army` | Units, upkeep, training queue |
-| POST | `/api/v1/army/train` | `{unitTypeId, count}` → cost+time from config → debit → queue rows |
-| POST | `/api/v1/army/train/:id/cancel` | Refund policy-based, remove queue item |
+| GET | `/api/v1/army` | Server-owned army projection: the full active roster (11 units, zero-count entries included) joined with real stacks, aggregate `totals{unitCount, upkeepFood, carryCapacity}` and the live FIFO `training` queue with server-clock-derived statuses (`TRAINING·COMPLETABLE`) + per-camp `speedBps` from real building levels |
+| GET | `/api/v1/army/catalog` | Materialized unit catalog: 11 units × stats (`attack·defense·health·speed·foodUpkeep·carryCapacity`), `trainingCost` (display strings — BigInt policy), `trainingTimeSec`, data-driven `strongAgainst`/`weakAgainst` (2500 bps counter edges), `trainingBuilding` + `requiredBuildingLevel` gates |
+| POST | `/api/v1/army/train` | `{unitId, count}` → unit must exist AND be active in the DB catalog (`UNIT_NOT_FOUND` 404 — retired baseline units included) → count policy (`VALIDATION_ERROR` 400 for ≤0/fractional/over-ceiling) → training building gate (`PREREQUISITE_MISSING` 409) → FIFO depth check (`TRAINING_QUEUE_FULL` 409) → batch cost debited via economy service (ledger `UNIT_TRAINING`, refType `training_queue`) → queue item appended with the window locked at enqueue (`startedAt = max(now, tail.completesAt)`, `completesAt = startedAt + perUnitMs×count` at the building's REAL speed) — ALL in one per-player serialized transaction. Unit counts have NO client write path |
+| POST | `/api/v1/army/train/:id/complete` | Claims a finished batch against the SERVER clock (`TRAINING_NOT_COMPLETE` + `remainingSec` if early); conditional claim (guarded on `status=TRAINING`) → `PlayerUnit` upsert-increment → power recalculated → `TRAINING_COMPLETE` notification — one transaction; retries → `TRAINING_NOT_ACTIVE`; foreign ids are indistinguishable from nonexistent ones (`TRAINING_NOT_FOUND` 404) |
+| POST | `/api/v1/army/train/[id]/cancel` | Policy refund through the ledger (`UNIT_TRAINING`, kind `cancel_refund`): 100% for a queued batch, 50% once under way (`ARMY_TRAINING` config matrix); conditional cancel then the remaining FIFO chain is re-walked so followers anchor as early as `now` while keeping their PAID per-unit windows |
+
+Batch semantics: one queue row = one batch; units land at claim time (mirrors the Phase 6 construction lifecycle). Counter matrix: Infantry ▸ Cavalry ▸ Ranged ▸ Infantry per unit; siege has no field counters and fears cavalry. Training policy lives in `config/army.ts` (`queueSlots: 5`, `maxUnitsPerBatch: 1000`, refund matrix).
 
 ### 2.6 Battle — Phase 5
 

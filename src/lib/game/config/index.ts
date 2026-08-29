@@ -9,6 +9,7 @@
  *    balance changes deploy via seed pipeline, not code paths.
  */
 export * from './units'
+export * from './army'
 export * from './technologies'
 export * from './quests'
 export * from './achievements'

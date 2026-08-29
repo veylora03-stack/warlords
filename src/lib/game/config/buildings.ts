@@ -227,7 +227,7 @@ const DEFS: BuildingDef[] = [
     name: 'Armory',
     category: 'MILITARY',
     description:
-      'Forges and upgrades equipment. Requires the Barracks to keep pace with the forge.',
+      'Forges equipment and siege engines. Requires the Barracks to keep pace with the forge.',
     maxLevel: BUILDING_MAX_LEVEL,
     costBase: { GOLD: 350, IRON: 200, WOOD: 150 },
     costGrowthBps: 14_500,
@@ -238,6 +238,9 @@ const DEFS: BuildingDef[] = [
     requires: (targetLevel) => ({ BARRACKS: Math.max(1, targetLevel - 1) }),
     effects: (level) => ({
       equipmentSpeedBps: 10_000 + 400 * (level - 1),
+      // Siege units (Catapult · Cannon · Siege Engine) train here — same
+      // per-level speed ladder as the other military camps (Phase 7).
+      trainingSpeedBps: 10_000 + 500 * (level - 1),
     }),
   },
   {

@@ -28,6 +28,12 @@ export const GET = defineRoute({}, async ({ request }) => {
       'city:upgrade':
         'POST /api/v1/city/buildings/:type/upgrade (server-side cost + construction timer)',
       'city:finish': 'POST /api/v1/city/buildings/:type/finish (claim completed construction)',
+      'army:state': 'GET /api/v1/army (roster · stacks · upkeep totals · live training queue)',
+      'army:unit-catalog':
+        'GET /api/v1/army/catalog (per-unit stats · costs · timers · counters · building gates)',
+      'army:train': 'POST /api/v1/army/train {unitId, count} (server-side cost + FIFO queue)',
+      'army:train-complete': 'POST /api/v1/army/train/:id/complete (claim finished batch)',
+      'army:train-cancel': 'POST /api/v1/army/train/:id/cancel (policy refund + queue re-walk)',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

@@ -227,10 +227,10 @@ describe('first-login chain — Telegram User → User → Player → City → I
     expect(typeof profile.city!.x).toBe('number')
     expect(buildingCount).toBe(17)
 
-    // Starter army.
-    const militia = army.find((u) => u.unitId === 'militia')
+    // Starter army (Phase 7 roster): 20 swordsmen + 10 archers.
+    const swordsman = army.find((u) => u.unitId === 'swordsman')
     const archer = army.find((u) => u.unitId === 'archer')
-    expect(militia?.count).toBe(20)
+    expect(swordsman?.count).toBe(20)
     expect(archer?.count).toBe(10)
 
     // Progression: level 1, zero XP, curve position reported.
@@ -241,8 +241,8 @@ describe('first-login chain — Telegram User → User → Player → City → I
     expect(profile.levelProgressBps).toBe(0)
 
     // Power: computed from REAL state (never hand-set) — exact starter value.
-    expect(profile.power).toBe('3810')
-    expect(profile.powerBreakdown).toEqual({ units: 2130, buildings: 1680, technologies: 0 })
+    expect(profile.power).toBe('5030')
+    expect(profile.powerBreakdown).toEqual({ units: 3350, buildings: 1680, technologies: 0 })
 
     // Honor / reputation / energy initial values.
     expect(profile.honor).toBe('0')
@@ -267,8 +267,8 @@ describe('first-login chain — Telegram User → User → Player → City → I
       select: { power: true },
     })
     const fresh = await computePlayerPower(db, chainPlayerId)
-    expect(player.power).toBe(3810n)
-    expect(fresh.total).toBe(3810)
+    expect(player.power).toBe(5030n)
+    expect(fresh.total).toBe(5030)
   })
 
   it('ledger invariant — exactly 5 BOOTSTRAP faucet rows back the wallet', async () => {
@@ -478,17 +478,17 @@ describe('power — always derived from real state, never from clients', () => {
     })
     const playerId = user!.player!.id
 
-    // Mutate state directly (as a future training service would, in-tx).
+    // Mutate state directly (as the training service would, in-tx).
     const newPower = await db.$transaction(async (tx) => {
       await tx.playerUnit.update({
-        where: { playerId_unitId: { playerId, unitId: 'militia' } },
+        where: { playerId_unitId: { playerId, unitId: 'swordsman' } },
         data: { count: { increment: 10 } },
       })
       return recalculatePlayerPower(tx, playerId)
     })
 
-    // militia base power is 75/unit → +10 units = +750.
-    expect(newPower).toBe(3810 + 750)
+    // swordsman base power is 136/unit → +10 units = +1360.
+    expect(newPower).toBe(5030 + 1360)
 
     const fresh = await computePlayerPower(db, playerId)
     expect(fresh.total).toBe(newPower)
@@ -502,7 +502,7 @@ describe('power — always derived from real state, never from clients', () => {
     // Restore the starter state for the duplicate-registration assertions above.
     await db.$transaction(async (tx) => {
       await tx.playerUnit.update({
-        where: { playerId_unitId: { playerId, unitId: 'militia' } },
+        where: { playerId_unitId: { playerId, unitId: 'swordsman' } },
         data: { count: { decrement: 10 } },
       })
       await recalculatePlayerPower(tx, playerId)

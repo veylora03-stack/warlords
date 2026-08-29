@@ -242,10 +242,12 @@ model Unit {
   carryCapacity Int     @default(0) // loot capacity
   trainingCost  Json // { GOLD: 100, FOOD: 50, IRON: 20 } (absolute amounts)
   trainingTimeSec Int
+  trainingBuilding String // BARRACKS|ARCHER_CAMP|STABLE|ARMORY (Phase 7)
+  requiredBuildingLevel Int @default(1) // min level of the training building
   strongAgainst Json? // [{ unitId, bonusBps }] — data-driven counters
-  weakAgainst   Json? // [{ unitId, penaltyBps }]
+  weakAgainst   Json? // [{ unitId, penaltyBps }] — data-driven counters
   description   String?
-  isActive      Boolean @default(true)
+  isActive      Boolean @default(true) // soft-retire instead of hard delete (Restrict FKs)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -286,6 +288,7 @@ model TrainingQueueItem {
   unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
   @@index([playerId, completesAt])
+  @@index([playerId, status])
   @@map("training_queue_items")
 }
 

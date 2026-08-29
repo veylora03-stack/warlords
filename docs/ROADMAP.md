@@ -106,7 +106,7 @@
 | 4.7 | Bootstrap hardening + frontend — `bootstrapPlayer` now zero-fills `Player.stats` from the typed catalog and calls `recalculatePlayerPower` as its final step (initial power is derived, never hand-set); `src/features/player/` slice (exact DTO mirror types + 3 TanStack Query hooks, 401 → `null` anonymous state); Player System console card renders live profile/statistics/state data | ✅ |
 | 4.8 | Tests: 35 new unit (leveling 13 · power 10 — incl. the exact documented starter power 3810 · energy 6 · stats 6) + 24 new integration through real route handlers + DB (authorization 401s on all 3 paths; first-login chain exact starter values incl. power **3810 = 2130 army + 1680 buildings**; duplicate registration idempotency; 6× parallel `ensurePlayer` and 5× parallel first logins converging on ONE player; XP grants → level-up `RANK_CHANGE` outbox notification + cap clamp; `INVALID_AMOUNT` rejections; statistics write validation; energy lazy regen with partial-tick carry + cap) + 3 e2e player-smoke over live HTTP (401 guard contract + full exchange → profile → state → statistics flow) | ✅ |
 
-**Starter power baseline (asserted by unit + integration tests):** 20 militia + 10 archers → army **2130**; 17 starter buildings at level 1 → **1680**; total **3810** (technologies 0).
+**Starter power baseline (asserted by unit + integration tests; updated in Phase 7 when the roster became the definitive 11-unit contract):** 20 swordsmen + 10 archers → army **3350**; 17 starter buildings at level 1 → **1680**; total **5030** (technologies 0). (Original Phase 4 baseline: 20 militia + 10 archers → 2130 + 1680 = **3810**.)
 
 **Quality gate:** lint ✓ · typecheck ✓ · format ✓ · unit 119 ✓ · integration 40 ✓ · e2e 10 ✓ · build ✓ · browser-verified.
 

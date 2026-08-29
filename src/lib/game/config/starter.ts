@@ -30,7 +30,7 @@ export const STARTER_BUILDINGS: BuildingType[] = [...BUILDING_TYPES]
 // ── Starter army ─────────────────────────────────────────────────────────────
 
 export const STARTER_UNITS: Array<{ unitId: string; count: number }> = [
-  { unitId: 'militia', count: 20 },
+  { unitId: 'swordsman', count: 20 },
   { unitId: 'archer', count: 10 },
 ]
 
