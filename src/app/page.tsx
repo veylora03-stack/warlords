@@ -1,45 +1,50 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
+import { useHealthQuery } from '@/features/system'
+import { useUiStore } from '@/stores/ui.store'
 
-interface HealthData {
-  status: string
-  app: string
-  version: string
-  phase: number
-  db: 'up' | 'down'
-  dbLatencyMs: number | null
-  uptimeSec: number
-  serverTime?: string
+type PhaseState = 'done' | 'next' | 'planned'
+
+interface PhaseRow {
+  id: string
+  name: string
+  state: PhaseState
 }
 
-const PHASES: Array<{ id: number; name: string; state: 'done' | 'next' | 'planned' }> = [
-  { id: 0, name: 'Architecture & Repository Setup', state: 'done' },
-  { id: 1, name: 'Database & Authentication', state: 'next' },
-  { id: 2, name: 'Player, Resources & Economy Core', state: 'planned' },
-  { id: 3, name: 'City & Buildings', state: 'planned' },
-  { id: 4, name: 'Army & Training', state: 'planned' },
-  { id: 5, name: 'Battle Engine', state: 'planned' },
-  { id: 6, name: 'Quests, Ranking & World', state: 'planned' },
-  { id: 7, name: 'Telegram Bot', state: 'planned' },
-  { id: 8, name: 'Mini App UI (full client)', state: 'planned' },
-  { id: 9, name: 'Admin Panel', state: 'planned' },
-  { id: 10, name: 'Security Hardening & Test Pass', state: 'planned' },
-  { id: 11, name: 'Deployment Preparation', state: 'planned' },
-  { id: 12, name: 'Load Testing', state: 'planned' },
-  { id: 13, name: 'Polish & Balance', state: 'planned' },
+const PHASES: PhaseRow[] = [
+  { id: '00', name: 'Architecture & Planning', state: 'done' },
+  { id: '01a', name: 'Project Foundation (tooling · config · logging · tests)', state: 'done' },
+  { id: '01b', name: 'Database & Authentication', state: 'next' },
+  { id: '02', name: 'Player, Resources & Economy Core', state: 'planned' },
+  { id: '03', name: 'City & Buildings', state: 'planned' },
+  { id: '04', name: 'Army & Training', state: 'planned' },
+  { id: '05', name: 'Battle Engine', state: 'planned' },
+  { id: '06', name: 'Quests, Ranking & World', state: 'planned' },
+  { id: '07', name: 'Telegram Bot', state: 'planned' },
+  { id: '08', name: 'Mini App UI (full client)', state: 'planned' },
+  { id: '09', name: 'Admin Panel', state: 'planned' },
+  { id: '10', name: 'Security Hardening & Test Pass', state: 'planned' },
+  { id: '11', name: 'Deployment Preparation', state: 'planned' },
+  { id: '12', name: 'Load Testing', state: 'planned' },
+  { id: '13', name: 'Polish & Balance', state: 'planned' },
 ]
 
 const DELIVERABLES = [
-  { label: 'System Architecture', file: 'docs/ARCHITECTURE.md' },
-  { label: 'Database Design (ERD, 45 entities)', file: 'docs/DATABASE_DESIGN.md' },
-  { label: 'API Design (REST /api/v1)', file: 'docs/API_DESIGN.md' },
-  { label: 'Battle Model (deterministic engine)', file: 'docs/BATTLE_MODEL.md' },
-  { label: 'Security Model (never trust the client)', file: 'docs/SECURITY.md' },
-  { label: 'Roadmap (Phases 0–13)', file: 'docs/ROADMAP.md' },
+  { label: 'Env config layer (Zod-validated, fail-fast)', file: 'src/config/env.ts' },
+  { label: 'Structured JSON logger (levels · redaction)', file: 'src/lib/logger/' },
+  {
+    label: 'Route factory (Zod → envelope) + request logging',
+    file: 'src/lib/api/route-handler.ts',
+  },
+  { label: 'Health module (service/types/barrel pattern)', file: 'src/lib/health/' },
+  { label: 'Frontend providers (TanStack Query) + feature slice', file: 'src/features/system/' },
+  { label: 'UI state store (Zustand)', file: 'src/stores/ui.store.ts' },
+  { label: 'Unit tests (bun test) + e2e API smoke', file: 'tests/' },
+  { label: 'Formatter + import-boundary lint rules', file: '.prettierrc.json' },
 ]
 
 const STACK = [
@@ -49,10 +54,11 @@ const STACK = [
   'Prisma ORM · PostgreSQL-first',
   'Zod v4 validation',
   'Zustand + TanStack Query',
+  'bun test · Prettier · ESLint boundaries',
   'Telegram Bot API + Mini App',
 ]
 
-function PhaseBadge({ state }: { state: 'done' | 'next' | 'planned' }) {
+function PhaseBadge({ state }: { state: PhaseState }) {
   if (state === 'done') {
     return (
       <Badge className="bg-amber-500/15 text-amber-400 border border-amber-500/40 font-semibold">
@@ -75,34 +81,9 @@ function PhaseBadge({ state }: { state: 'done' | 'next' | 'planned' }) {
 }
 
 export default function WarlordsConsole() {
-  const [health, setHealth] = useState<HealthData | null>(null)
-  const [healthError, setHealthError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const res = await fetch('/api/health', { cache: 'no-store' })
-        const json = (await res.json()) as { ok: boolean; data: HealthData }
-        if (!cancelled) {
-          if (json.ok) {
-            setHealth(json.data)
-            setHealthError(null)
-          } else {
-            setHealthError('Health endpoint returned an error envelope')
-          }
-        }
-      } catch {
-        if (!cancelled) setHealthError('API unreachable')
-      }
-    }
-    load()
-    const timer = setInterval(load, 15000)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [])
+  const autoRefresh = useUiStore((s) => s.autoRefresh)
+  const toggleAutoRefresh = useUiStore((s) => s.toggleAutoRefresh)
+  const { data: health, error: healthError } = useHealthQuery({ enabled: autoRefresh })
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 selection:bg-amber-500/30">
@@ -118,13 +99,13 @@ export default function WarlordsConsole() {
                 ⚔️ WAR<span className="text-amber-400">LORDS</span>
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-                Persistent server-authoritative strategy world — Bot + Mini App + REST API.
-                This console tracks real engineering progress. Nothing here is a mockup.
+                Persistent server-authoritative strategy world — Bot + Mini App + REST API. This
+                console tracks real engineering progress. Nothing here is a mockup.
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 0 COMPLETE
+                PHASE 1A COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -137,7 +118,7 @@ export default function WarlordsConsole() {
       {/* ── Main ───────────────────────────────────────────────────────── */}
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">
         <div className="grid gap-6 md:grid-cols-2">
-          {/* System status — live from /api/health */}
+          {/* System status — live from /api/health via TanStack Query */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
@@ -153,13 +134,19 @@ export default function WarlordsConsole() {
                       health?.db === 'up' ? 'bg-emerald-400' : 'bg-red-400'
                     }`}
                   />
-                  {healthError ? 'API ERROR' : health?.db === 'up' ? 'DATABASE UP' : 'DB DOWN'}
+                  {healthError
+                    ? 'API ERROR'
+                    : health?.db === 'up'
+                      ? autoRefresh
+                        ? 'DATABASE UP'
+                        : 'UP · PAUSED'
+                      : 'DB DOWN'}
                 </span>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 font-mono text-xs text-zinc-400">
               {healthError ? (
-                <p className="text-red-400">{healthError}</p>
+                <p className="text-red-400">{healthError.message}</p>
               ) : health ? (
                 <>
                   <div className="flex justify-between">
@@ -183,6 +170,17 @@ export default function WarlordsConsole() {
                 <p className="animate-pulse text-zinc-500">probing /api/health …</p>
               )}
               <Separator className="bg-zinc-800" />
+              <div className="flex items-center justify-between">
+                <label htmlFor="auto-refresh" className="cursor-pointer">
+                  auto-refresh (15s)
+                </label>
+                <Switch
+                  id="auto-refresh"
+                  checked={autoRefresh}
+                  onCheckedChange={toggleAutoRefresh}
+                  aria-label="Toggle health auto-refresh"
+                />
+              </div>
               <p className="text-[11px] leading-relaxed text-zinc-500">
                 Probe performs a real <span className="text-amber-400">SELECT 1</span> through
                 Prisma against the database — the same path game traffic will use.
@@ -200,24 +198,24 @@ export default function WarlordsConsole() {
             <CardContent className="space-y-3 text-xs leading-relaxed text-zinc-400">
               <ul className="space-y-2">
                 <li>
-                  <span className="font-semibold text-amber-400">Bot + Mini App</span>
-                  {' '}→ Telegram clients; Mini App is the full game UI.
+                  <span className="font-semibold text-amber-400">Bot + Mini App</span> → Telegram
+                  clients; Mini App is the full game UI.
                 </li>
                 <li>
-                  <span className="font-semibold text-amber-400">REST /api/v1</span>
-                  {' '}→ thin HTTP adapters over application services.
+                  <span className="font-semibold text-amber-400">REST /api/v1</span> → thin HTTP
+                  adapters over application services.
                 </li>
                 <li>
-                  <span className="font-semibold text-amber-400">Engines (pure)</span>
-                  {' '}→ economy · battle (seeded & replayable) · quest · progress · world.
+                  <span className="font-semibold text-amber-400">Engines (pure)</span> → economy ·
+                  battle (seeded & replayable) · quest · progress · world.
                 </li>
                 <li>
-                  <span className="font-semibold text-amber-400">Ledger economy</span>
-                  {' '}→ every resource delta appended, auditable, non-negative by construction.
+                  <span className="font-semibold text-amber-400">Ledger economy</span> → every
+                  resource delta appended, auditable, non-negative by construction.
                 </li>
                 <li>
-                  <span className="font-semibold text-amber-400">Lazy-tick world</span>
-                  {' '}→ production & timers resolve on access; no cron dependency.
+                  <span className="font-semibold text-amber-400">Lazy-tick world</span> → production
+                  & timers resolve on access; no cron dependency.
                 </li>
               </ul>
               <Separator className="bg-zinc-800" />
@@ -249,11 +247,11 @@ export default function WarlordsConsole() {
                 <li key={p.id} className="flex items-center justify-between gap-3 py-2.5">
                   <div className="flex min-w-0 items-center gap-3">
                     <span
-                      className={`w-8 shrink-0 text-right font-mono text-sm font-bold ${
+                      className={`w-9 shrink-0 text-right font-mono text-sm font-bold ${
                         p.state === 'done' ? 'text-amber-400' : 'text-zinc-600'
                       }`}
                     >
-                      {String(p.id).padStart(2, '0')}
+                      {p.id}
                     </span>
                     <span
                       className={`min-w-0 flex-1 text-sm leading-snug ${
@@ -274,11 +272,11 @@ export default function WarlordsConsole() {
           </CardContent>
         </Card>
 
-        {/* Phase 0 deliverables */}
+        {/* Phase 1 deliverables */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 0 Deliverables
+              Phase 1a — Foundation Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -293,10 +291,10 @@ export default function WarlordsConsole() {
             ))}
             <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="text-xs text-zinc-300">
-                Prisma schema — 45 entities, validated &amp; pushed (PostgreSQL-first)
+                Quality gate — build · lint · typecheck · unit + e2e tests all green
               </span>
               <code className="shrink-0 font-mono text-[10px] text-amber-400">
-                prisma/schema.prisma
+                bun test ✓ tsc ✓ eslint ✓
               </code>
             </div>
           </CardContent>
@@ -306,7 +304,9 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>WARLORDS Dev Console · Phase 0 · awaiting approval for Phase 1</span>
+          <span>
+            WARLORDS Dev Console · Phase 1a · awaiting approval for Phase 1b (Database & Auth)
+          </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

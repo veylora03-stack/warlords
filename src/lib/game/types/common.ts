@@ -75,7 +75,14 @@ export type QuestStatus = (typeof QUEST_STATUSES)[number]
 
 // ── Reputation ───────────────────────────────────────────────────────────────
 
-export const REPUTATION_LEVELS = ['HONORABLE', 'TRUSTED', 'NEUTRAL', 'DANGEROUS', 'RUTHLESS', 'TYRANT'] as const
+export const REPUTATION_LEVELS = [
+  'HONORABLE',
+  'TRUSTED',
+  'NEUTRAL',
+  'DANGEROUS',
+  'RUTHLESS',
+  'TYRANT',
+] as const
 export type ReputationLevel = (typeof REPUTATION_LEVELS)[number]
 
 // ── Clan ─────────────────────────────────────────────────────────────────────
@@ -107,7 +114,13 @@ export type TerritoryType = (typeof TERRITORY_TYPES)[number]
 
 // ── Battles & marches ────────────────────────────────────────────────────────
 
-export const BATTLE_TYPES = ['PVP_ATTACK', 'PVE', 'TERRITORY_ASSAULT', 'SCOUT', 'BOSS_RAID'] as const
+export const BATTLE_TYPES = [
+  'PVP_ATTACK',
+  'PVE',
+  'TERRITORY_ASSAULT',
+  'SCOUT',
+  'BOSS_RAID',
+] as const
 export type BattleType = (typeof BATTLE_TYPES)[number]
 
 export const BATTLE_RESULTS = ['ATTACKER_WIN', 'DEFENDER_WIN', 'DRAW'] as const
@@ -116,7 +129,13 @@ export type BattleResult = (typeof BATTLE_RESULTS)[number]
 export const MARCH_TYPES = ['ATTACK', 'SCOUT', 'REINFORCE', 'RETURN'] as const
 export type MarchType = (typeof MARCH_TYPES)[number]
 
-export const MARCH_STATUSES = ['EN_ROUTE', 'RESOLVING', 'RETURNING', 'ARRIVED', 'CANCELLED'] as const
+export const MARCH_STATUSES = [
+  'EN_ROUTE',
+  'RESOLVING',
+  'RETURNING',
+  'ARRIVED',
+  'CANCELLED',
+] as const
 export type MarchStatus = (typeof MARCH_STATUSES)[number]
 
 // ── Events ───────────────────────────────────────────────────────────────────

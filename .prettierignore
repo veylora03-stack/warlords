@@ -1,0 +1,24 @@
+# WARLORDS — Prettier scope: source, tests, and root configs only.
+# Docs, lockfiles, vendored dirs and generated assets are intentionally out of scope.
+
+node_modules
+.next
+out
+build
+coverage
+bun.lock
+
+# documentation — prose, tables and mermaid must not be reflowed
+docs
+*.md
+
+# vendored / sandbox-only trees
+skills
+examples
+download
+mini-services
+
+# generated / assets
+public
+db
+prisma/migrations

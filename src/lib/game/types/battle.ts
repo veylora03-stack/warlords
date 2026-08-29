@@ -12,12 +12,7 @@ import type { BattleResult, BattleType, UnitClass } from './common'
 import type { Coordinate } from './common'
 
 // TerrainType is declared here to keep battle self-contained until Phase 5.
-export type TerrainType =
-  | 'PLAINS'
-  | 'FOREST'
-  | 'MOUNTAINS'
-  | 'RIVER'
-  | 'CITY'
+export type TerrainType = 'PLAINS' | 'FOREST' | 'MOUNTAINS' | 'RIVER' | 'CITY'
 
 // Re-exported for engine convenience.
 export type { BattleResult, BattleType, UnitClass }

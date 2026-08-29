@@ -208,7 +208,7 @@ lib/cache · lib/logger · lib/rate-limit ── leaf infra, imported by any lay
 components/** ── never import lib/db, lib/bot, or engines; UI talks to /api/v1 only
 ```
 
-Violations = review-blocking. (ESLint import-boundary enforcement lands with Phase 1 tooling.)
+Violations = review-blocking. (Enforced since Phase 1a via `no-restricted-imports` in `eslint.config.mjs`: UI layer cannot import db/bot/engine/services; engines cannot import db/adapters.)
 
 ## Cross-Cutting Strategies (summary — details in BACKEND_ARCHITECTURE.md)
 

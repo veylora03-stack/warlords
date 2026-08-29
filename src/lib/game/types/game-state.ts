@@ -15,7 +15,6 @@ import type {
   ClanRole,
   Coordinate,
   LedgerResource,
-  QuestStatus,
   ReputationLevel,
   UnitClass,
 } from './common'

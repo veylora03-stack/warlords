@@ -1,0 +1,23 @@
+# WARLORDS — Git normalization
+* text=auto eol=lf
+
+# Shell scripts must stay LF even on Windows checkouts
+*.sh text eol=lf
+
+# Windows-only files
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.db binary
+
+# Lockfiles: never merge, never show diffs
+bun.lock binary -diff
+package-lock.json -diff

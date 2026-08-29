@@ -55,8 +55,12 @@ export const ERROR_CODES = {
 
 export type ErrorCode = keyof typeof ERROR_CODES
 
+/** JSON-safe value constraint for error details (recursion allows issue arrays). */
+export type ErrorDetailsValue =
+  string | number | boolean | null | ReputationLevel | ErrorDetails | ErrorDetailsValue[]
+
 export interface ErrorDetails {
-  [key: string]: string | number | boolean | ReputationLevel | null
+  [key: string]: ErrorDetailsValue
 }
 
 export class AppError extends Error {
@@ -83,12 +87,17 @@ export class AppError extends Error {
 export const errors = {
   unauthorized: (msg = 'Authentication required') => new AppError('UNAUTHORIZED', msg),
   forbidden: (msg = 'Forbidden') => new AppError('FORBIDDEN', msg),
-  validation: (msg: string, details?: ErrorDetails) => new AppError('VALIDATION_ERROR', msg, details),
+  validation: (msg: string, details?: ErrorDetails) =>
+    new AppError('VALIDATION_ERROR', msg, details),
   notFoundPlayer: () => new AppError('PLAYER_NOT_FOUND', 'Player not found'),
   internal: (msg = 'Internal server error') => new AppError('INTERNAL_ERROR', msg),
   insufficient(resource: Lowercase<string>, needed: number, have: number) {
     const code = `INSUFFICIENT_${resource.toUpperCase()}` as ErrorCode
-    if (!(code in ERROR_CODES)) return new AppError('INTERNAL_ERROR', `Unknown resource: ${resource}`)
-    return new AppError(code, `Not enough ${resource}: need ${needed}, have ${have}`, { needed, have })
+    if (!(code in ERROR_CODES))
+      return new AppError('INTERNAL_ERROR', `Unknown resource: ${resource}`)
+    return new AppError(code, `Not enough ${resource}: need ${needed}, have ${have}`, {
+      needed,
+      have,
+    })
   },
 }

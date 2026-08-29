@@ -10,6 +10,9 @@
 
 import { NextResponse } from 'next/server'
 import { AppError, type ErrorDetails } from './errors'
+import { createLogger } from '@/lib/logger'
+
+const apiLogger = createLogger({ module: 'api' })
 
 export interface ApiMeta {
   requestId: string
@@ -98,23 +101,27 @@ export function fail(
 /** Catch-all wrapper for route handlers — unexpected errors never leak stacks. */
 export async function handle(
   request: Request,
-  fn: () => Promise<NextResponse>,
-): Promise<NextResponse> {
+  fn: () => Promise<Response> | Response,
+): Promise<Response> {
+  const done = apiLogger.timer('request complete', {
+    requestId: getRequestId(request),
+    method: request.method,
+    path: new URL(request.url).pathname,
+  })
+  const startedAt = Date.now()
   try {
-    return await fn()
+    const response = await fn()
+    done({ status: response.status })
+    response.headers.set('x-response-time-ms', String(Date.now() - startedAt))
+    return response
   } catch (err) {
-    if (err instanceof AppError) return fail(request, err)
-    // Unknown error: log server-side, return generic 500.
-    console.error(
-      JSON.stringify({
-        level: 'error',
-        time: new Date().toISOString(),
-        requestId: getRequestId(request),
-        module: 'api',
-        msg: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      }),
-    )
+    if (err instanceof AppError) {
+      // Expected failure class: envelope says what and why — no stack noise.
+      apiLogger.warn('request failed', { requestId: getRequestId(request), err })
+      return fail(request, err)
+    }
+    // Unknown error: log server-side (full detail), return generic 500.
+    apiLogger.error('unhandled error', { requestId: getRequestId(request), err })
     return fail(request, new AppError('INTERNAL_ERROR', 'Internal server error'))
   }
 }

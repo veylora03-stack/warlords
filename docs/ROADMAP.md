@@ -11,15 +11,17 @@
 ```
 1. bun run lint                → 0 errors
 2. bun run typecheck           → 0 errors
-3. dev server boots            → no fatal errors in dev.log
-4. runtime verification        → Agent Browser golden path + API real-data checks
-5. git commit                  → conventional, one logical change-set
-6. worklog.md                  → append Task section
+3. bun run build               → production build green (typechecked, no ignoreBuildErrors)
+4. bun run test / test:e2e     → all green
+5. dev server boots            → no fatal errors in dev.log
+6. runtime verification        → Agent Browser golden path + API real-data checks
+7. git commit                  → conventional, one logical change-set
+8. worklog.md                  → append Task section
 ```
 
 ---
 
-## PHASE 0 — Architecture & Planning ✅ (current)
+## PHASE 0 — Architecture & Planning ✅
 
 | # | Task | Status |
 |---|---|---|
@@ -35,12 +37,32 @@
 
 ---
 
-## PHASE 1 — Database & Authentication (M)
+## PHASE 1a — Project Foundation ✅ (current)
+
+| # | Task | Status |
+|---|---|---|
+| 1a.1 | TypeScript hardened: `noImplicitAny` on, `noImplicitOverride`, `noFallthroughCasesInSwitch`, ES2022 target | ✅ |
+| 1a.2 | ESLint: unused-vars/const rules on + **import-boundary enforcement** (UI↛db/bot/engine, engine purity) per ARCHITECTURE.md | ✅ |
+| 1a.3 | Prettier 3 + `.prettierrc` + `.prettierignore` + `format` / `format:check` scripts | ✅ |
+| 1a.4 | Env config layer `src/config/env.ts` — Zod-validated, fail-fast, pure `loadEnv` (tested); client-safe constants `src/config/app.ts` | ✅ |
+| 1a.5 | Structured logger `src/lib/logger/` — levels, child bindings, redaction, timers; wired into API envelope `handle()` | ✅ |
+| 1a.6 | Route factory `src/lib/api/route-handler.ts` — Zod body/query validation → envelope; health module `src/lib/health/` as reference module pattern | ✅ |
+| 1a.7 | Frontend structure: `app/providers.tsx` (TanStack Query), `src/features/system/` slice, `src/stores/ui.store.ts` (Zustand), `src/types/` barrels | ✅ |
+| 1a.8 | Testing infra: `bun test tests/unit/` (25 tests) + `tests/e2e/` API smoke vs real server | ✅ |
+| 1a.9 | Git hygiene: `.gitattributes`, `.env` + `db/*.db` **untracked** (secret-leak fix), db ignores | ✅ |
+| 1a.10 | Production build: `ignoreBuildErrors` removed, `reactStrictMode` on, standalone build verified end-to-end | ✅ |
+| 1a.11 | Scripts: `dev build start test test:e2e lint typecheck format format:check` | ✅ |
+
+**Exit criteria met.** Awaiting approval for Phase 1b.
+
+---
+
+## PHASE 1b — Database & Authentication (M)
 
 **Goal: a Telegram user opens the app and becomes a persisted, session-backed player.**
 
 Tasks:
-1. `lib/logger` structured logger + `x-request-id` middleware (+ security headers)
+1. `x-request-id` middleware (+ security headers) — logger itself already shipped in Phase 1a (`src/lib/logger`)
 2. Prisma baseline migration (`prisma migrate dev --name baseline`) — commit migration files
 3. `lib/auth/verify-init-data.ts` — official Telegram HMAC verification (constant-time) + freshness
 4. `lib/auth/session.ts` — JWT sign/verify (`jose`), cookie set/clear, sliding refresh; Zod for auth bodies
