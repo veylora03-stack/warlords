@@ -57,8 +57,33 @@ model User {
   auditLogs     AuditLog[] @relation("AuditActor")
   announcements Announcement[]
   adminRecord   AdminUser?
+  authSessions  AuthSession[]
 
   @@map("users")
+}
+
+// One server-side session per verified initData exchange. The row is the
+// revocation/audit authority; the JWT itself only carries pointers (sub, sid).
+model AuthSession {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // sha256(raw initData) — a replayed initData re-attaches to this row instead
+  // of minting a second session (unique = one live session per initData).
+  initDataHash     String    @unique
+  // sha256(session JWT) — the raw token is never persisted.
+  tokenHash        String    @unique
+  telegramAuthDate DateTime
+  issuedIp         String?
+  userAgent        String?
+  lastUsedAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, expiresAt])
+  @@map("auth_sessions")
 }
 
 // ─────────────────────────────────────────────── PLAYER & ECONOMY CORE ──────

@@ -55,7 +55,7 @@ describe('errors factory', () => {
 
   it('every declared code resolves to a valid HTTP status', () => {
     for (const status of Object.values(ERROR_CODES)) {
-      expect([400, 401, 403, 404, 409, 429, 500]).toContain(status)
+      expect([400, 401, 403, 404, 409, 429, 500, 503]).toContain(status)
     }
   })
 })

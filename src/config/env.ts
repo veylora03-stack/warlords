@@ -47,6 +47,15 @@ const envSchema = z.object({
     .regex(/^\s*\d+(\s*,\s*\d+)*\s*$/, 'ADMIN_TELEGRAM_IDS must be comma-separated integers')
     .optional()
     .transform((v) => (v ? v.split(',').map((s) => Number(s.trim())) : [])),
+
+  /**
+   * Max age of Telegram initData `auth_date` — older init data is rejected
+   * (bounds the replay window; the client re-opens the Mini App to refresh).
+   */
+  TELEGRAM_AUTH_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(604_800).default(86_400),
+
+  /** Server-side session lifetime for issued JWT sessions. */
+  SESSION_TTL_SECONDS: z.coerce.number().int().min(600).max(2_592_000).default(604_800),
 })
 
 export type RawEnv = z.infer<typeof envSchema>
@@ -73,22 +82,35 @@ export class ConfigError extends Error {
 
 // ── Pure loader (unit-testable) ──────────────────────────────────────────────
 
+/**
+ * Secrets that must exist before a production server may serve traffic.
+ * In development they stay optional so the sandbox can boot without a real
+ * bot token — auth endpoints then fail with AUTH_NOT_CONFIGURED (503).
+ */
+const PROD_REQUIRED = ['JWT_SECRET', 'TELEGRAM_BOT_TOKEN'] as const
+
 export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
   const result = envSchema.safeParse(source)
 
   if (!result.success) {
-    const issues = result.error.issues.map((issue) => {
-      const path = issue.path.join('.')
-      return `${path || '(root)'}: ${issue.message}`
-    })
-    throw new ConfigError(issues)
+    throw new ConfigError(
+      result.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`),
+    )
+  }
+  const data = result.data
+
+  if (data.NODE_ENV === 'production') {
+    const missing = PROD_REQUIRED.filter((key) => !data[key])
+    if (missing.length > 0) {
+      throw new ConfigError(missing.map((key) => `${key}: required in production`))
+    }
   }
 
   return Object.freeze({
-    ...result.data,
-    isDev: result.data.NODE_ENV === 'development',
-    isProd: result.data.NODE_ENV === 'production',
-    isTest: result.data.NODE_ENV === 'test',
+    ...data,
+    isDev: data.NODE_ENV === 'development',
+    isProd: data.NODE_ENV === 'production',
+    isTest: data.NODE_ENV === 'test',
   })
 }
 

@@ -13,7 +13,10 @@ export const ERROR_CODES = {
   UNAUTHORIZED: 401,
   INVALID_INIT_DATA: 401,
   SESSION_EXPIRED: 401,
+  SESSION_REVOKED: 401,
   BANNED: 403,
+  // Auth infrastructure (503) — misconfigured server, not a client fault
+  AUTH_NOT_CONFIGURED: 503,
   // Permission (403)
   FORBIDDEN: 403,
   CLAN_ROLE_REQUIRED: 403,
@@ -43,6 +46,7 @@ export const ERROR_CODES = {
   RATE_LIMITED: 429,
   IDEMPOTENT_REPLAY: 409,
   // Not found (404)
+  NOT_FOUND: 404,
   PLAYER_NOT_FOUND: 404,
   TERRITORY_NOT_FOUND: 404,
   BATTLE_NOT_FOUND: 404,

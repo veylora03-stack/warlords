@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { useHealthQuery } from '@/features/system'
+import { useMeQuery } from '@/features/auth'
 import { useUiStore } from '@/stores/ui.store'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -23,8 +24,12 @@ const PHASES: PhaseRow[] = [
     name: 'Database Foundation (31-table schema · migration · seeds · tx bootstrap)',
     state: 'done',
   },
-  { id: '03?', name: 'Authentication & Player Bootstrap (proposed)', state: 'next' },
-  { id: '—', name: 'Player, Resources & Economy Core', state: 'planned' },
+  {
+    id: '03',
+    name: 'Telegram Authentication (initData HMAC · sessions · guard · replay defense)',
+    state: 'done',
+  },
+  { id: '04?', name: 'Player, Resources & Economy Core (proposed)', state: 'next' },
   { id: '—', name: 'City & Buildings', state: 'planned' },
   { id: '—', name: 'Army & Training', state: 'planned' },
   { id: '—', name: 'Battle Engine', state: 'planned' },
@@ -37,26 +42,35 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: '31-table contract schema (FKs · indexes · cascades · timestamps)',
-    file: 'prisma/schema.prisma',
-  },
-  { label: 'Baseline migration (applied, committed)', file: 'prisma/migrations/' },
-  {
-    label: 'Data-driven balance config (units · techs · quests · items)',
-    file: 'src/lib/game/config/',
+    label: 'initData HMAC verification (Telegram-official algorithm, timing-safe)',
+    file: 'src/lib/telegram/',
   },
   {
-    label: 'Transactional player bootstrap (one tx, zero partial state)',
-    file: 'src/lib/game/services/',
+    label: 'Session service — tx: user upsert · replay guard · JWT · bootstrap',
+    file: 'src/lib/auth/session.service.ts',
   },
-  { label: 'Idempotent dev seed (catalogs · season · admin · 2 players)', file: 'prisma/seed.ts' },
   {
-    label: 'Invariant verifier (ledger ⇔ wallet exact reconciliation)',
-    file: 'scripts/db-verify.ts',
+    label: 'auth_sessions table (token hashes · initData dedup · revocation)',
+    file: 'prisma/migrations/*_add_auth_sessions/',
   },
-  { label: 'Config invariant unit tests (45 total green)', file: 'tests/unit/config.test.ts' },
   {
-    label: 'Env config layer + structured logger (Phase 1, standing)',
+    label: 'Authorization guard — bearer/cookie · DB ban check · sliding refresh',
+    file: 'src/lib/auth/guard.ts',
+  },
+  {
+    label: 'Auth endpoints (login · me · logout · dev-impersonate)',
+    file: 'src/app/api/v1/auth/',
+  },
+  {
+    label: 'Sliding-window rate limiter (Redis-ready interface)',
+    file: 'src/lib/rate-limit/',
+  },
+  {
+    label: 'Unit + integration tests (7 attack scenarios covered)',
+    file: 'tests/unit/ · tests/integration/',
+  },
+  {
+    label: 'Env config layer + structured logger (standing)',
     file: 'src/config/ · src/lib/logger/',
   },
 ]
@@ -98,6 +112,7 @@ export default function WarlordsConsole() {
   const autoRefresh = useUiStore((s) => s.autoRefresh)
   const toggleAutoRefresh = useUiStore((s) => s.toggleAutoRefresh)
   const { data: health, error: healthError } = useHealthQuery({ enabled: autoRefresh })
+  const { data: me, error: meError, isPending: mePending } = useMeQuery()
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 selection:bg-amber-500/30">
@@ -119,7 +134,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 2 COMPLETE
+                PHASE 3 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -198,6 +213,83 @@ export default function WarlordsConsole() {
               <p className="text-[11px] leading-relaxed text-zinc-500">
                 Probe performs a real <span className="text-amber-400">SELECT 1</span> through
                 Prisma against the database — the same path game traffic will use.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Session — live from /api/v1/auth/me via TanStack Query */}
+          <Card className="border-zinc-800 bg-zinc-900/60">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
+                Session
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    me ? 'text-emerald-400' : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      me ? 'bg-emerald-400' : 'bg-zinc-600'
+                    }`}
+                  />
+                  {meError ? 'AUTH ERROR' : me ? 'SIGNED IN' : 'ANONYMOUS'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 font-mono text-xs text-zinc-400">
+              {meError ? (
+                <p className="text-red-400">{meError.message}</p>
+              ) : me ? (
+                <>
+                  <div className="flex justify-between">
+                    <span>identity</span>
+                    <span className="text-zinc-200">tg:{me.user.telegramId}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>name</span>
+                    <span className="text-zinc-200">
+                      {me.user.firstName}
+                      {me.user.username ? ` (@${me.user.username})` : ''}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>player</span>
+                    <span className="text-zinc-200">
+                      {me.player ? `${me.player.name} · lv${me.player.level}` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>session_exp</span>
+                    <span className="text-zinc-200">
+                      {new Date(me.session.expiresAt).toISOString().slice(0, 16).replace('T', ' ')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>role</span>
+                    <span className="text-zinc-200">{me.user.role}</span>
+                  </div>
+                </>
+              ) : mePending ? (
+                <p className="animate-pulse text-zinc-500">probing /api/v1/auth/me …</p>
+              ) : (
+                <>
+                  <p className="leading-relaxed text-zinc-500">
+                    No session — the browser is anonymous. In production, Telegram opens the Mini
+                    App with signed initData exchanged at{' '}
+                    <span className="text-amber-400">POST /api/v1/auth/telegram</span>.
+                  </p>
+                  <p className="leading-relaxed text-zinc-500">
+                    Dev: <span className="text-amber-400">POST /api/v1/auth/dev-impersonate</span>{' '}
+                    (allowlisted + audited) issues a test session.
+                  </p>
+                </>
+              )}
+              <Separator className="bg-zinc-800" />
+              <p className="text-[11px] leading-relaxed text-zinc-500">
+                initData is verified with Telegram&apos;s official HMAC-SHA256 algorithm — the bot
+                token and JWT secret never leave the server. Replay of identical initData
+                re-attaches to the same session instead of minting a new one.
               </p>
             </CardContent>
           </Card>
@@ -286,11 +378,11 @@ export default function WarlordsConsole() {
           </CardContent>
         </Card>
 
-        {/* Phase 1 deliverables */}
+        {/* Phase 3 deliverables */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 2 — Database Foundation Deliverables
+              Phase 3 — Telegram Authentication Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -305,11 +397,11 @@ export default function WarlordsConsole() {
             ))}
             <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="text-xs text-zinc-300">
-                Quality gate — migrate · generate · build · lint · typecheck · 45 unit + 3 e2e tests
-                · ledger reconciles exactly
+                Quality gate — migrate · generate · lint · typecheck · unit + integration + e2e
+                tests · production build · 7 auth attack scenarios green
               </span>
               <code className="shrink-0 font-mono text-[10px] text-amber-400">
-                db:seed ✓ db:verify ✓ tsc ✓ eslint ✓
+                verify ✓ sessions ✓ guard ✓ tests ✓
               </code>
             </div>
           </CardContent>
@@ -319,9 +411,7 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>
-            WARLORDS Dev Console · Phase 2 · awaiting approval for Phase 3 (Auth & Player Bootstrap)
-          </span>
+          <span>WARLORDS Dev Console · Phase 3 · awaiting approval for Phase 4 (Economy Core)</span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

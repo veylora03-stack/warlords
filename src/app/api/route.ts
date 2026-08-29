@@ -13,6 +13,10 @@ export const GET = defineRoute({}, async ({ request }) => {
     version: APP_VERSION,
     endpoints: {
       health: '/api/health',
+      'auth:telegram-login': 'POST /api/v1/auth/telegram',
+      'auth:me': 'GET /api/v1/auth/me',
+      'auth:logout': 'POST /api/v1/auth/logout',
+      'auth:dev-impersonate': 'POST /api/v1/auth/dev-impersonate (non-production only)',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

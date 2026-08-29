@@ -52,6 +52,36 @@ describe('loadEnv', () => {
     expect(() => loadEnv({ ...BASE_ENV, ADMIN_TELEGRAM_IDS: '111, oops' })).toThrow(ConfigError)
   })
 
+  it('requires JWT_SECRET and TELEGRAM_BOT_TOKEN in production', () => {
+    expect(() => loadEnv({ DATABASE_URL: 'file:./db/test.db', NODE_ENV: 'production' })).toThrow(
+      ConfigError,
+    )
+    try {
+      loadEnv({ DATABASE_URL: 'file:./db/test.db', NODE_ENV: 'production' })
+      expect.unreachable()
+    } catch (err) {
+      const cfgErr = err as ConfigError
+      expect(cfgErr.issues.some((i) => i.includes('JWT_SECRET'))).toBe(true)
+      expect(cfgErr.issues.some((i) => i.includes('TELEGRAM_BOT_TOKEN'))).toBe(true)
+    }
+    const prod = loadEnv({
+      DATABASE_URL: 'file:./db/test.db',
+      NODE_ENV: 'production',
+      JWT_SECRET: 'x'.repeat(32),
+      TELEGRAM_BOT_TOKEN: '123:abc',
+    })
+    expect(prod.isProd).toBe(true)
+  })
+
+  it('applies auth tunable defaults and bounds', () => {
+    const env = loadEnv(BASE_ENV)
+    expect(env.TELEGRAM_AUTH_MAX_AGE_SECONDS).toBe(86_400)
+    expect(env.SESSION_TTL_SECONDS).toBe(604_800)
+    expect(() => loadEnv({ ...BASE_ENV, TELEGRAM_AUTH_MAX_AGE_SECONDS: '10' })).toThrow(ConfigError)
+    expect(() => loadEnv({ ...BASE_ENV, SESSION_TTL_SECONDS: 'abc' })).toThrow(ConfigError)
+    expect(loadEnv({ ...BASE_ENV, SESSION_TTL_SECONDS: '3600' }).SESSION_TTL_SECONDS).toBe(3600)
+  })
+
   it('freezes the returned env object', () => {
     const env = loadEnv(BASE_ENV)
     expect(() => {

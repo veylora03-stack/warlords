@@ -24,21 +24,23 @@
 
 | Group | Codes |
 |---|---|
-| Auth (401) | `UNAUTHORIZED`, `INVALID_INIT_DATA`, `SESSION_EXPIRED`, `BANNED` |
+| Auth (401) | `UNAUTHORIZED`, `INVALID_INIT_DATA`, `SESSION_EXPIRED`, `SESSION_REVOKED`, `BANNED` (403) |
+| Auth infrastructure (503) | `AUTH_NOT_CONFIGURED` (server misconfiguration — e.g. `JWT_SECRET`/`TELEGRAM_BOT_TOKEN` missing in dev; production fails fast at env load) |
 | Permission (403) | `FORBIDDEN`, `CLAN_ROLE_REQUIRED`, `PROTECTED_TARGET` (newbie shield), `SELF_TARGET` |
 | Validation (400) | `VALIDATION_ERROR`, `INVALID_TARGET`, `INVALID_AMOUNT`, `ARMY_EMPTY` |
-| State (409) | `INSUFFICIENT_GOLD`, `INSUFFICIENT_WOOD`, `INSUFFICIENT_IRON`, `INSUFFICIENT_FOOD`, `INSUFFICIENT_CRYSTAL`, `INSUFFICIENT_GEMS`, `INSUFFICIENT_ENERGY`, `INSUFFICIENT_UNITS`, `WAREHOUSE_FULL`, `BUILDING_QUEUE_BUSY`, `PREREQUISITE_MISSING`, `ALREADY_IN_CLAN`, `NOT_IN_CLAN`, `ORDER_NO_LONGER_OPEN`, `RATE_LIMITED` (429), `IDEMPOTENT_REPLAY`, `ACTION_ON_COOLDOWN` |
-| Not found (404) | `PLAYER_NOT_FOUND`, `TERRITORY_NOT_FOUND`, `BATTLE_NOT_FOUND`, `QUEST_NOT_FOUND`, `ORDER_NOT_FOUND`, `CLAN_NOT_FOUND` |
+| State (409) | `INSUFFICIENT_GOLD`, `INSUFFICIENT_WOOD`, `INSUFFICIENT_IRON`, `INSUFFICIENT_FOOD`, `INSUFFICIENT_CRYSTAL`, `INSUFFICIENT_GEMS`, `INSUFFICIENT_ENERGY`, `INSUFFICIENT_UNITS`, `WAREHOUSE_FULL`, `BUILDING_QUEUE_BUSY`, `PREREQUISITE_MISSING`, `ALREADY_IN_CLAN`, `NOT_IN_CLAN`, `ORDER_NO_LONGER_OPEN`, `IDEMPOTENT_REPLAY`, `ACTION_ON_COOLDOWN` |
+| Throttling (429) | `RATE_LIMITED` (+ `details.retryAfterSec`) |
+| Not found (404) | `NOT_FOUND` (generic), `PLAYER_NOT_FOUND`, `TERRITORY_NOT_FOUND`, `BATTLE_NOT_FOUND`, `QUEST_NOT_FOUND`, `ORDER_NOT_FOUND`, `CLAN_NOT_FOUND` |
 | Server (500) | `INTERNAL_ERROR` |
 
 ### 1.3 Auth & headers
 
 | Header | Direction | Purpose |
 |---|---|---|
-| `Authorization: Bearer <jwt>` *(or HttpOnly cookie `wl_session`)* | client→server | Session issued after initData verification |
+| `Authorization: Bearer <session JWT>` *(or HttpOnly cookie `wl_session`)* | client→server | Credential for every protected route — Bearer header wins over the cookie; both carry the JWT issued by `POST /auth/telegram` |
 | `x-request-id` | both | Correlation ID (server generates if absent, echoes back) |
 | `Idempotency-Key: <uuid>` | client→server | Required on: attack, market fill/cancel, reward claim, admin adjustments |
-| `x-telegram-init-data` | client→server | Raw Telegram `initData` — only on `POST /auth/telegram` |
+| — | client→server | Raw Telegram `initData` travels in the **JSON body** of `POST /auth/telegram` (`{ initData }`) — never in a header |
 
 ### 1.4 Rate limits (sliding window, per user+route group)
 
@@ -62,13 +64,18 @@ Exceeded → `429 { error.code: "RATE_LIMITED", details.retryAfterSec }`.
 |---|---|---|---|
 | GET | `/api/health` | — | Liveness + DB probe (used by status console & uptime checks) |
 
-### 2.2 Auth — Phase 1
+### 2.2 Auth — Phase 3 ✅
+
+All auth routes share the auth rate-limit group (10/min per IP, enforced before verification work — see §1.4). Session = JWT HS256 (`sub`/`sid`/`role`) + `auth_sessions` row; transport = `Authorization: Bearer` or HttpOnly `wl_session` cookie.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/v1/auth/telegram` | Body `{initData}` → HMAC-SHA256 verification against bot token (`WebAppData` derived key) → upsert User+Player → set `wl_session` HttpOnly JWT → `{player profile}` |
-| POST | `/api/v1/auth/dev-impersonate` | **Non-production only.** Guarded by `NODE_ENV !== 'production'` && `ADMIN_SECRET`. Enables browser testing of the Mini App outside Telegram. Audited. |
-| POST | `/api/v1/auth/logout` | Clear session |
+| POST | `/api/v1/auth/telegram` | Body `{initData}` → Telegram-official HMAC-SHA256 verification (freshness ≤ `TELEGRAM_AUTH_MAX_AGE_SECONDS`) → ONE tx: user upsert by telegramId → ban check → replay resolution (unique initDataHash re-attach + token rotation) → `auth_sessions` row → `bootstrapPlayer` on first login → `{ token, tokenType: "Bearer", expiresAt, replayed, user, player, session }` + Set-Cookie `wl_session` |
+| GET | `/api/v1/auth/me` | Protected. DB-fresh identity + player projection + session info; inside the 48h sliding window re-issues the session (Set-Cookie + `refreshed.token`) |
+| POST | `/api/v1/auth/logout` | Protected. Revokes the `auth_sessions` row server-side (token dies → `SESSION_REVOKED` afterwards) and clears the cookie. Idempotent |
+| POST | `/api/v1/auth/dev-impersonate` | **Non-production only (404 in production).** Rate limit 5/min per IP → `NODE_ENV` gate → `ADMIN_SECRET` constant-time compare → `ADMIN_TELEGRAM_IDS` allowlist → audited (`DEV_IMPERSONATE`) session for the allowlisted identity (dev user auto-created + bootstrapped) |
+
+Failure codes: `INVALID_INIT_DATA` 401 (with `details.reason`), `UNAUTHORIZED` 401, `SESSION_EXPIRED` 401, `SESSION_REVOKED` 401, `BANNED` 403, `AUTH_NOT_CONFIGURED` 503, `RATE_LIMITED` 429, `NOT_FOUND` 404 (dev-impersonate in production) — full map in AUTHENTICATION.md §5.
 
 ### 2.3 Player — Phase 2
 

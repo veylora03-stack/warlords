@@ -3,7 +3,7 @@
 A persistent, **server-authoritative** MMO strategy game delivered as a **Telegram Bot + Mini App + REST API**.
 Build a city, raise armies, collect commanders, fight deterministic battles, conquer territories, climb leaderboards.
 
-> Status: **Phase 2 — Database Foundation: COMPLETE** (Phase 0 architecture · Phase 1 foundation · Phase 2 schema/migration/seeds)
+> Status: **Phase 3 — Telegram Authentication: COMPLETE** (Phase 0 architecture · Phase 1a foundation · Phase 2 database · Phase 3 initData HMAC + session JWT + auth endpoints + rate limiting)
 > Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
 ---
@@ -39,7 +39,8 @@ Build a city, raise armies, collect commanders, fight deterministic battles, con
 ```bash
 bun install
 cp .env.example .env         # fill in real values
-bun run db:push              # apply Prisma schema
+bun run db:migrate           # apply committed Prisma migrations
+bun run db:seed              # idempotent catalogs + season + dev fixtures
 bun run dev                  # http://localhost:3000
 ```
 
@@ -51,6 +52,7 @@ bun run dev                  # http://localhost:3000
 | `bun run build` | Typechecked production build (standalone output) |
 | `bun run start` | Serve the production build (`PORT` env respected) |
 | `bun run test` | Unit tests (`bun test tests/unit/`) |
+| `bun run test:integration` | Auth flow integration tests (routes + DB, no HTTP server) |
 | `bun run test:e2e` | API smoke tests against a running server (`E2E_BASE_URL` optional) |
 | `bun run lint` | ESLint incl. module import-boundary rules |
 | `bun run typecheck` | `tsc --noEmit` (strict) |
@@ -75,6 +77,9 @@ src/
 ├── config/          env.ts (Zod-validated, server-only) · app.ts (client-safe constants)
 ├── lib/
 │   ├── api/         envelope · error taxonomy · route factory (Zod → envelope)
+│   ├── auth/        session service · JWT (jose) · cookies · guard · hashing
+│   ├── telegram/    initData HMAC verification (Telegram-official, pure)
+│   ├── rate-limit/  in-memory sliding window (Redis-ready store interface)
 │   ├── logger/      structured JSON logger (levels · bindings · redaction)
 │   ├── health/      reference backend module (service + types + barrel)
 │   ├── db.ts        Prisma singleton
@@ -86,9 +91,10 @@ src/
 ├── stores/          Zustand UI state slices
 ├── components/      ui (shadcn) · game panels (later phases)
 ├── types/           shared DTO re-exports (type-only, client-safe)
-└── app/             page shell · providers · /api adapters
+└── app/             page shell · providers · /api adapters (incl. /api/v1/auth/*)
 tests/
-├── unit/            bun test — logger, errors, env, route validation, config invariants
+├── unit/            bun test — telegram initData, auth jwt/rate-limit, logger, errors, env, route validation, config invariants
+├── integration/     auth flow tests (routes + DB, real secrets, no HTTP server)
 └── e2e/             API smoke against a real server
 ```
 

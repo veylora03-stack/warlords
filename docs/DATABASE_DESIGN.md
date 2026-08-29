@@ -278,11 +278,22 @@ strings, money is BigInt, JSON columns are PG `jsonb`-ready).
 | events | `GameEvent` | server-driven events (was game_events) |
 | admin_users | `AdminUser` | explicit admin registry (identity stays on User) |
 | audit_logs | `AuditLog` | append-only admin audit (was admin_audit_logs) |
+| auth_sessions | `AuthSession` | **Phase 3** — one live session per initData: `initDataHash` **unique** (sha256 of raw initData), `tokenHash` **unique** (sha256 of the session JWT — raw token never persisted), `userId` FK **Cascade**, `telegramAuthDate`, `issuedIp/userAgent`, `lastUsedAt`, `expiresAt`, `revokedAt` (logout revocation), index `(userId, expiresAt)` |
 
 Support tables beyond the contract: `training_queue_items`, `player_commanders`,
 `commander_equipment`, `scout_reports`, `clan_invitations`, `clan_messages`,
 `clan_war_participations`, `world_bosses`, `world_boss_damages`, `announcements`,
 `diplomacy_relations` (post-MVP), `spy_missions` (post-MVP), `idempotency_keys`.
+
+**Session semantics (`auth_sessions`, Phase 3).** The login transaction
+(`src/lib/auth/session.service.ts`) resolves a replayed identical initData
+against the unique `initDataHash` and re-attaches it to the same row while
+rotating `tokenHash` — one live session per initData, old token dead
+immediately, retries never lock users out; fresh initData mints a new row.
+Expired rows of the user are deleted in the same tx; logout sets `revokedAt`.
+Every request re-reads the row (`sid` claim → row → tokenHash match →
+`revokedAt`/`expiresAt` → user role/ban), making the DB the session and
+authorization authority.
 
 **Cascade policy (enforced in schema):** owned instance data → `Cascade`;
 historical/ledger records → `Restrict`; catalog FKs → `Restrict` (catalogs are
@@ -294,7 +305,8 @@ mutable table carries `updatedAt` (`@updatedAt`); append-only tables carry
 (`src/lib/game/services/player-bootstrap.service.ts`) creates the complete
 player state — player, wallet, ledger faucet rows, city, 17 starter buildings,
 starter army, starter quests, welcome notification — inside ONE
-`db.$transaction`. It is consumed by the seed today and by auth signup next.
+`db.$transaction`. It is consumed by the seed and by the Phase 3 auth flow
+(first login), so user, session and full player state commit atomically.
 All future money-touching services follow the same interactive-transaction
 pattern with ledger appends and `balanceAfter` chain inside the tx boundary.
 

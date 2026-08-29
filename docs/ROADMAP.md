@@ -74,23 +74,28 @@
 
 ---
 
-## PROPOSED NEXT — Authentication & Player Bootstrap (M) *(phase number awaits user assignment)*
+## PHASE 3 — Telegram Authentication ✅ (current)
 
-**Goal: a Telegram user opens the app and becomes a persisted, session-backed player.**
+| # | Task | Status |
+|---|---|---|
+| 3.1 | `src/lib/telegram/init-data.ts` — Telegram-official HMAC-SHA256 verification (secret = HMAC("WebAppData", bot token); sorted data_check_string; constant-time compare), `auth_date` freshness (`TELEGRAM_AUTH_MAX_AGE_SECONDS` default 24h, 300s skew), 8 KiB bound, signed-`user` shape validation; single `INVALID_INIT_DATA` 401 code with `details.reason` taxonomy | ✅ |
+| 3.2 | `src/lib/auth/` — session config (`resolveAuthConfig` → AUTH_NOT_CONFIGURED 503 when secrets missing), JWT HS256 via `jose` (`sub`=userId, `sid`=session row id, `role` observability-only), cookie/bearer transport (`wl_session` HttpOnly+SameSite=Lax, Secure in prod), sha256 digest helpers | ✅ |
+| 3.3 | Transactional session service: user upsert (telegramId identity) → ban check (BANNED 403) → expired-session cleanup → replay resolution → `auth_sessions` row (sha256 initDataHash unique, sha256 tokenHash unique) → `bootstrapPlayer` on first login — ONE tx; per-request `authenticate` re-reads role/ban from DB | ✅ |
+| 3.4 | Routes: `POST /api/v1/auth/telegram` (Bearer token + cookie, `replayed` flag), `GET /api/v1/auth/me` (DB-fresh identity + sliding refresh within 48h of expiry), `POST /api/v1/auth/logout` (server-side revocation + cookie clear), `POST /api/v1/auth/dev-impersonate` (Flow B: rate-limit → prod 404 gate → ADMIN_SECRET constant-time → allowlist → audited) | ✅ |
+| 3.5 | Authorization guard `requireAuth(request)` composed into protected routes — deliberately NO Next.js edge `middleware.ts` (edge runtime cannot run Prisma; ban check must hit DB on every request) | ✅ |
+| 3.6 | `src/lib/rate-limit` — in-memory sliding window, Redis-ready `RateLimitStore` interface, shared per-process store; auth group 10/min per IP enforced BEFORE verification work; 429 `RATE_LIMITED` with `retryAfterSec` | ✅ |
+| 3.7 | Env: `TELEGRAM_AUTH_MAX_AGE_SECONDS` (default 86400) + `SESSION_TTL_SECONDS` (default 604800); `JWT_SECRET` + `TELEGRAM_BOT_TOKEN` required in production (fail-fast), dev → 503; `.env.example` updated | ✅ |
+| 3.8 | Tests: 84 unit (initData 23 · jwt 6 · rate-limit 8 · config 20 · env 9 · errors 7 · logger 7 · route-handler 4) + 16 integration (full route→DB auth flow) + 7 e2e smoke — covering the 7 attack scenarios: valid auth · invalid hash · expired · missing/malformed · manipulated user data · replay attempt · unauthorized API access (+ ban, revocation, dev-impersonate guards) | ✅ |
 
-Tasks:
-1. `x-request-id` middleware (+ security headers) — logger itself already shipped in Phase 1a (`src/lib/logger`)
-2. Prisma baseline migration (`prisma migrate dev --name baseline`) — commit migration files
-3. `lib/auth/verify-init-data.ts` — official Telegram HMAC verification (constant-time) + freshness
-4. `lib/auth/session.ts` — JWT sign/verify (`jose`), cookie set/clear, sliding refresh; Zod for auth bodies
-5. `POST /api/v1/auth/telegram` (+ rate limit) → upsert user → bootstrap tx: player + wallet + city (x,y) + 17 starter buildings + first quests assignment
-6. `POST /api/v1/auth/dev-impersonate` (env-guarded, audited) + `POST /api/v1/auth/logout`
-7. `lib/rate-limit` sliding window (per user+group) wired into middleware helper
-8. Seed pipeline: catalog tables from `game/config` (idempotent upsert) — initial config files for buildings/units baseline
-9. Mini App shell v0: boot → initData handshake → session store → HUD skeleton + tab nav placeholder
-10. `GET /api/v1/player/me` projection (behind session)
+**Replay policy (key decision):** a replayed identical initData re-attaches to the SAME `auth_sessions` row (unique `initDataHash`) and rotates its token hash — no session farming, old token invalidated immediately, legit network retries never lock users out; fresh initData (new `auth_date`) mints a new session. Rationale documented in SECURITY.md §6.
 
-Acceptance: browser dev-impersonate creates real User+Player rows; reload keeps session; banned fixture user gets `BANNED`; rate limiter trips with 429; ledger has bootstrap rows (starter resources).
+**Quality gate:** lint ✓ · typecheck ✓ · unit 84 ✓ · integration 16 ✓ · e2e 7 ✓ · build ✓.
+
+---
+
+## Phase plan (original numbering — superseded by user-assigned phases above; contract tables are the source of truth)
+
+> Deferred from the original auth proposal, still open: Mini App shell v0 (boot → initData handshake → HUD skeleton) and `GET /api/v1/player/me` projection — they land with the UI/economy phases below.
 
 ## PHASE 2 — Player, Resources & Economy Core (M)
 
