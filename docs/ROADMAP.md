@@ -1,82 +1,137 @@
-# WARLORDS — Development Roadmap & Phase Contracts
+# WARLORDS — Development Roadmap (Precise)
 
-> Working agreement: every phase ends with a **quality gate** and a **commit**, then a written report. "Done" = build ✓ typecheck ✓ lint ✓ runtime-verified ✓ (browser/E2E where applicable).
+> Working agreement: every phase ends with the **quality gate** + commit + worklog entry + written report.
+> "Done" = lint ✓ typecheck ✓ runtime-verified (browser/API where applicable) ✓ honest report ✓.
+> Effort keys: S = one focused session · M = 2–3 sessions · L = multi-session build.
 
 ---
 
-## 0. Quality gate (applies to EVERY phase)
+## 0. Quality Gate (every phase, non-negotiable)
 
 ```
-1. bun run lint          → 0 errors
-2. bun run typecheck     → 0 errors
-3. bun run dev (or build for release) → server boots, no fatal in dev.log
-4. Runtime verification  → Agent Browser: page renders, golden-path interactions work,
-                           API returns real data, no hydration/console errors
-5. git commit            → conventional message, one logical change-set
-6. worklog.md            → append section (Task ID, what/why/decisions)
+1. bun run lint                → 0 errors
+2. bun run typecheck           → 0 errors
+3. dev server boots            → no fatal errors in dev.log
+4. runtime verification        → Agent Browser golden path + API real-data checks
+5. git commit                  → conventional, one logical change-set
+6. worklog.md                  → append Task section
 ```
 
-## 1. Phase contracts
+---
 
-### PHASE 0 — Architecture & Repository Setup ✅ (current)
-Deliverables: docs set (architecture, DB design, API design, battle model, security, roadmap) · full Prisma schema · domain type contracts · API envelope/error infrastructure · health endpoint · repo hygiene (README, .env.example, gitignore, typecheck script) · baseline commits.
-Exit criteria: schema validates against DB driver; typecheck/lint clean; `/` renders the phase console; `/api/health` returns real DB probe.
+## PHASE 0 — Architecture & Planning ✅ (current)
 
-### PHASE 1 — Database & Authentication
-Prisma migrate baseline · Telegram initData verification (`WebAppData` HMAC) · session JWT cookie · auth routes + dev-impersonate (guarded, audited) · middleware (request id, ban check, rate limit) · structured logger · Player+Wallet+City+starter buildings bootstrap transaction · seed pipeline for catalogs (from config) · Mini App shell boots into session.
-Exit: opening the app in Telegram (or dev impersonation) creates a real User+Player and the session persists across reloads.
+| # | Task | Status |
+|---|---|---|
+| 0.1 | Repo inspection + baseline commit | ✅ |
+| 0.2 | 12-view architecture set (this doc tree) | ✅ |
+| 0.3 | Prisma schema — 45 entities, validated + pushed | ✅ |
+| 0.4 | Domain type contracts (`src/lib/game/types`) | ✅ |
+| 0.5 | API envelope + AppError taxonomy + health probe | ✅ |
+| 0.6 | Phase console page (verified desktop/mobile) | ✅ |
+| 0.7 | Repo hygiene: README, .env.example, typecheck script | ✅ |
 
-### PHASE 2 — Player, Resources & Economy Core
-Lazy-tick reconciler · collect endpoint · warehouse capacity · ledger writes on every delta · energy regen · XP/level/power progression service · notifications outbox + polling · transactions history UI panel.
-Exit: resources accrue, collect is capped and ledgered, no negative-balance path reachable via API fuzzing.
+**Exit criteria met.** No further implementation until Phase 1 approval.
 
-### PHASE 3 — City & Buildings
-Config-driven building catalog (17 types) · upgrade flow (cost/requirements/queue slot/timers) · cancel policy · production & storage effects of levels · city UI panel with live timers.
-Exit: full upgrade chain Town Hall → others works with prerequisites; timers complete via reconciler.
+---
 
-### PHASE 4 — Army
-Unit catalog (10 types, 4 classes) · training queue (cost/time/upkeep) · cancel policy · upkeep affecting food accrual · army UI panel.
-Exit: training completes into `player_units`; food drain visible and ledgered.
+## PHASE 1 — Database & Authentication (M)
 
-### PHASE 5 — Battle Engine (MVP core)
-Pure battle engine per BATTLE_MODEL.md · march/attack/scout endpoints · protection & cooldown rules · loot/honor/reputation application · reports + round viewer · replay endpoint · scout reports with TTL.
-Exit: two dev accounts can fight; results deterministic (same seed = same outcome); replay matches original; all validations hold (shield, newbie, energy, army lock).
+**Goal: a Telegram user opens the app and becomes a persisted, session-backed player.**
 
-### PHASE 6 — Quests, Ranking & World
-Quest engine + daily/weekly assignment · achievements · technology tree research · world map viewport + territories + fog of war · territory capture (PvE first) · leaderboard categories with cached snapshots · clan basics (create/join/leave/roles/chat) · notifications wired to bot dispatcher.
-Exit: main quest line guides a fresh player to first attack; leaderboard reflects real power.
+Tasks:
+1. `lib/logger` structured logger + `x-request-id` middleware (+ security headers)
+2. Prisma baseline migration (`prisma migrate dev --name baseline`) — commit migration files
+3. `lib/auth/verify-init-data.ts` — official Telegram HMAC verification (constant-time) + freshness
+4. `lib/auth/session.ts` — JWT sign/verify (`jose`), cookie set/clear, sliding refresh; Zod for auth bodies
+5. `POST /api/v1/auth/telegram` (+ rate limit) → upsert user → bootstrap tx: player + wallet + city (x,y) + 17 starter buildings + first quests assignment
+6. `POST /api/v1/auth/dev-impersonate` (env-guarded, audited) + `POST /api/v1/auth/logout`
+7. `lib/rate-limit` sliding window (per user+group) wired into middleware helper
+8. Seed pipeline: catalog tables from `game/config` (idempotent upsert) — initial config files for buildings/units baseline
+9. Mini App shell v0: boot → initData handshake → session store → HUD skeleton + tab nav placeholder
+10. `GET /api/v1/player/me` projection (behind session)
 
-### PHASE 7 — Telegram Bot
-Bot module (webhook + dev long-poll) · command set (/start /help /play /profile /rank /quests /clan /invite /settings) · deep links with referral tracking · notification delivery (attack incoming/result, construction/training done, clan events) with mute settings.
-Exit: full loop playable from Telegram: bot → Mini App → bot alerts.
+Acceptance: browser dev-impersonate creates real User+Player rows; reload keeps session; banned fixture user gets `BANNED`; rate limiter trips with 429; ledger has bootstrap rows (starter resources).
 
-### PHASE 8 — Mini App UI (full game client)
-Dark-fantasy game UI (not admin-dashboard aesthetic): bottom nav HOME·CITY·ARMY·WORLD·CLAN·QUESTS·RANKING·PROFILE · city view with buildings · map viewport · battle reports cinematic summary · commander roster · inventory · settings · onboarding flow · optimistic UI only where safe.
-Exit: all features from P2–P7 usable on a phone-sized viewport; sticky footer; 60fps scrolling lists (virtualized where long).
+## PHASE 2 — Player, Resources & Economy Core (M)
 
-### PHASE 9 — Admin Panel
-Admin auth (secret + allowlist) · player search/inspect · ban/unban · resource adjust (idempotent, audited) · battle/economy inspection · announcements · event controls · audit log viewer.
-Exit: every admin action visible in audit log with before/after.
+Tasks: reconciler service (`reconcilePlayerState`) · collect endpoint (ECONOMY §3.1) · warehouse capacity model · energy regen · XP/level/power progression engine · ledger query endpoint · notifications outbox + unread badge + mark-read · BigInt→string serialization audit on all responses · UI: HOME panel (resources, energy, level, quick collect) + PROFILE basics.
+**Acceptance:** fuzz endpoint with concurrent collects → no negative/over-cap/double-credit (verified via repeated parallel requests); ledger balances reconcile exactly.
 
-### PHASE 10 — Security Hardening & Test Pass
-Rate-limit tuning · idempotency coverage audit · permission matrix fuzzing (attack spam, negative amounts, cross-user ids, clan role escalation, replay/cooldown bypass) · economy invariants checks · replay verification sweep.
-(Where the sandbox permits a test runner, suites are added; otherwise verification is executed as scripted API exercise + browser flows, reported honestly.)
+## PHASE 3 — City & Buildings (M)
 
-### PHASE 11 — Deployment Preparation
-PG-compatible migration baseline against Supabase target · env manifest · Vercel config · bot webhook registration procedure · backup/restore runbook · staging smoke checklist.
+Tasks: full building config (17 types, costs/durations/effects/prereqs per level) · upgrade/cancel endpoints (ECONOMY §3.2) · production & capacity effects by level · CITY panel with live countdowns + cost display + queue state.
+**Acceptance:** full TOWN_HALL→unlock chain works; timers complete via reconciler; cancel refunds per policy; prerequisites enforced (attempts → `PREREQUISITE_MISSING`).
 
-### PHASE 12 — Load Testing
-Scenario scripts (33 CCU baseline: collect/build/attack mix) · bottleneck report (expected: Prisma pool + SQLite→PG delta) · index/verify plan.
+## PHASE 4 — Army (S)
 
-### PHASE 13 — Polish & Balance
-Economy tuning via config (no code) · onboarding FTUE polish · visual polish pass · season 0 dry-run · final security review.
+Tasks: unit catalog config (10 units, counters as data) · train/cancel endpoints (ECONOMY §3.3) · upkeep in production math · ARMY panel (roster, queue, counters info).
+**Acceptance:** training completes into player_units; food net-rate reflects upkeep; cannot train without barracks level; cost math matches config exactly.
 
-## 2. Post-MVP backlog (architecture-ready, not yet implemented)
+## PHASE 5 — Battle Engine (L) — MVP core
 
-Market escrow · diplomacy (alliance/peace/war/trade/embargo) · spy missions & counter-intel · world boss raids with damage leaderboard · seasons & seasonal resets · full clan wars (preparation/battle phases, territory scoring) · clan research & quests · WebSocket chat via mini-service.
+Tasks: `game/config/battle.ts` (BattleConfig v1) · seeded PRNG util · pure `simulate()` per BATTLE_MODEL §3 · march service (create/resolve/cancel, CAS status transitions per §8) · attack/scout endpoints + early-warning notification · protection rules · loot/honor/reputation application (ECONOMY §3.4) · reports + round viewer panel · replay endpoint + integrity self-check · scout reports TTL.
+**Acceptance:** two fixture accounts fight; same seed replays byte-identical; all validation paths return exact codes; concurrent attack on same units cannot double-commit (CAS proven); defender shield respected.
 
-## 3. Git conventions
+## PHASE 6 — Quests, Ranking, World & Clan Basics (L)
 
-- `feat|fix|docs|refactor|chore|test(scope): imperative summary`
-- One commit per logical change-set; phase exit = release-tagged commit `phase-N-complete`.
-- Never overwrite unreviewed existing work; architecture changes require doc update in the same commit.
+Tasks: quest engine (objective hooks) + main/daily assignment + claim (idempotent) · achievements · tech tree config + research endpoints · world map generation (seeded territories around player cities) + viewport endpoint + fog of war · territory capture (PvE) · leaderboard snapshots + rankings endpoint (cached) · clan CRUD + roles + join/leave + chat table (polling) · bot dispatcher wired to outbox.
+**Acceptance:** fresh player guided by MAIN quests to first attack; rankings match `players.power` ordering; viewport hides unscouted intel; clan role rules enforced (officer-only invite etc.).
+
+## PHASE 7 — Telegram Bot (M)
+
+Tasks: webhook adapter + secret verification · dev long-poll runner · command handlers (9 commands) · referral attribution + rewards · notification delivery queue (per-user throttle, mute prefs, deep-link buttons) · `/settings` inline keyboard.
+**Acceptance:** real bot (dev token) round-trips: /start → open app → attack → both players get bot alerts; referral credit granted once (idempotent).
+
+## PHASE 8 — Mini App UI (full client) (L)
+
+Tasks: all panels to production polish per FRONTEND_ARCHITECTURE (city view, world map viewport, battle reports cinematic summary, commander roster, inventory/equip, quests center, rankings with pagination, clan screens, settings, onboarding FTUE) · i18n fa/en · haptics/theme/BackButton wiring · virtualized long lists · dynamic panel loading.
+**Acceptance:** every P2–P7 feature usable at 390px; 60fps scroll on rankings/ledger; sticky footer correct; zero console errors; fa + en switch clean.
+
+## PHASE 9 — Admin Panel (M)
+
+Per ADMIN_ARCHITECTURE: admin auth + allowlist · player search/inspect · ban/unban · adjust-resources (idempotent) · economy overview (mint/burn) · battle inspection + replay verify · announcements · event controls · audit viewer.
+**Acceptance:** every mutation visible in audit log with before/after; impersonated admin cannot escalate beyond allowlist.
+
+## PHASE 10 — Security Hardening & Verification Pass (M)
+
+Tasks: permission-matrix exercise script (attack spam, negative amounts, cross-user ids, clan role escalation, replay/cooldown bypass, idempotency replay, shield dodge attempts) · economy invariant sweep (ledger reconciliation endpoint) · rate-limit tuning · error-code contract audit · headers/CSP pass · secrets audit.
+**Acceptance:** scripted abuse run produces only expected codes; ledger reconciles to zero discrepancy; findings fixed or filed with severity.
+
+## PHASE 11 — Deployment Prep (S)
+
+Tasks: PG migration baseline vs Supabase + CHECK constraints · env manifest finalization · Vercel config + standalone build verification · bot webhook registration procedure + runbook · backup/restore runbook · staging smoke checklist.
+
+## PHASE 12 — Load Testing (S)
+
+Tasks: 33-CCU scenario script (collect/build/train/attack mix, realistic think-times) · measure p95 latency per endpoint class · bottleneck report (expected: DB pool, sweep contention) · index verify + fix · rate-limit headroom check.
+
+## PHASE 13 — Polish & Balance (M)
+
+Tasks: economy tuning via config (no code) · FTUE polish · UI polish pass · season 0 dry-run · final security review · release tagging.
+
+---
+
+## Dependency Graph
+
+```
+P1 ──► P2 ──► P3 ──► P4 ──► P5 ──► P6 ──► P7
+ │      │      │      │      │      └─► P8 (UI full client)
+ │      │      │      │      └────────► P6 needs battle results for quests/rank
+ └───── P9 (needs users/audit from P1; richer inspection grows with P2–P6)
+        P10 (needs P5 economy+battle surfaces; pre-deploy)
+        P11 → P12 → P13 (deployment chain)
+```
+
+Parallelization notes: P9 core (auth+player inspect) can start once P1 lands; P8 panels land incrementally per phase (each phase ships its panel) — P8 as a phase is the *polish/integration* pass, not the first appearance of UI.
+
+## Risk Register (top risks → mitigation)
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| SQLite dev vs PG prod behavior drift (locks, Json) | late surprises | PG-first schema, tx shapes documented, Phase 11 staging on Supabase before launch |
+| Deterministic engine regressions | replay integrity | replay-verify endpoint + sweep in P5/P10; configVersion snapshots |
+| Economy exploits (dupes, negative) | economy death | ledger-first + in-tx re-reads + idempotency + P10 abuse script |
+| Telegram webview quirks (background JS) | missed timers UX | server-anchored lazy-tick (truth never depends on client being online) |
+| Sandbox single-port constraint | realtime limits | polling MVP; socket.io mini-service only when justified (P6+) |
+| Scope creep (post-MVP systems) | MVP never ships | ROADMAP is the contract; post-MVP backlog stays out of phases 1–9 |

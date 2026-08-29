@@ -128,3 +128,66 @@ Config is authored in `src/lib/game/config/battle.ts`, snapshotted into each bat
 - Target lock: defender state is snapshotted at resolution, never at request time — stale screenshots cannot be abused.
 - All random draws flow from the single seeded stream in fixed order — no client seed influence; client never sends RNG.
 - Replays are computed from DB snapshots only; a tampered client cannot forge inputs because inputs are not client-supplied.
+
+---
+
+## 7. Complete Flow (sequence, authoritative)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as API /battle/attack
+    participant S as BattleService (tx)
+    participant E as BattleEngine (pure)
+    participant D as DB
+
+    C->>A: POST { targetPlayerId | territoryId, composition } + Idempotency-Key
+    A->>A: authN → rate-limit → Zod validate
+    A->>S: requestAttack(userId, input)
+    Note over S: TX BEGIN + reconcilePlayerState (timers, marches)
+    S->>D: lock attacker units (re-read counts)
+    S->>S: VALIDATE — energy ≥ cost · attack cooldown · target exists & visible<br/>newbie shield (target level<5 or age<48h) · shield item · same-clan rule · distance
+    S->>D: deduct units (EN_ROUTE) · deduct energy · ledger(energy, reason=attack)
+    S->>D: INSERT march { units snapshot, arrivesAt = now + travelTime(dist, speed) }
+    Note over S: TX COMMIT
+    A-->>C: 202 { marchId, arrivesAt, serverTime }
+
+    Note over S,D: on arrival — triggered by target's reconcile / any reader / client sweep
+    S->>D: TX BEGIN · load march → RESOLVING · snapshot defender forces<br/>(units + wall + tech + commander + equipment → aggregate BpsModifiers)
+    S->>E: simulate({ seed, config snapshot, attackerSide, defenderSide, terrain })
+    E-->>S: { result, rounds[], losses, survivors, hospital, loot plan, honor, rep }
+    S->>D: casualties → player_units (hospital share) · loot transfer (ledger both sides, refType=battle)
+    S->>D: honor/reputation deltas · commander XP · territory ownership (if assault) · quest hooks
+    S->>D: INSERT battle + battle_rounds + battle_logs (attacker & defender views) · march → ARRIVED · schedule RETURN march
+    S->>D: outbox notifications (ATTACK_RESULT both sides, ATTACK_INCOMING already sent at depart)
+    Note over S,D: TX COMMIT
+```
+
+**Attack-incoming early warning**: a notification + optional bot message is emitted at step 4 (depart), not only at resolution.
+
+## 8. March State Machine
+
+```
+            create(attack/scout/reinforce)
+                     │
+                     ▼
+               ┌─────────┐   cancel (attacker, pre-arrival: units return,
+               │ EN_ROUTE│──────────  energy/loot rules per config; audited)
+               └────┬────┘
+                    │ arrivesAt reached (resolver: target reconcile | any reader | sweep | WORKER)
+                    ▼
+               ┌──────────┐
+               │ RESOLVING│  (transient; single resolver wins — status CAS guard in tx)
+               └────┬─────┘
+        ┌───────────┼─────────────────┐
+        ▼           ▼                 ▼
+   ATTACK/SCOUT  REINFORCE       (resolution fails:
+        │           │            safety path: return units home, alert admin)
+        ▼           ▼
+  ┌──────────┐  ┌─────────┐
+  │  ARRIVED │  │RETURNING│──► ARRIVED(home) — survivors rejoin player_units
+  └──────────┘  └─────────┘
+```
+
+Resolver exclusivity: `UPDATE marches SET status='RESOLVING' WHERE id=? AND status='EN_ROUTE'` — rowsAffected=0 ⇒ someone else resolved; skip. This makes sweep + reconcile + worker idempotent against each other.

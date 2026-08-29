@@ -33,3 +33,28 @@ Stage Summary:
 - Phase 0 exit criteria met: schema validates & pushes; typecheck/lint clean; `/` renders verified console; `/api/health` returns real DB probe.
 - Key decisions recorded: Next.js Route Handlers as REST layer with framework-agnostic game core; PostgreSQL-first Prisma schema (SQLite sandbox only); JWT session via `jose` over next-auth for Telegram initData; lazy-tick world without cron; ledger-first economy; deterministic replayable battles with configVersion snapshots; post-MVP tables schema-ready from day one.
 - Awaiting user approval to begin PHASE 1 (Database & Authentication: migrations, Telegram initData verification, session JWT, middleware, logger, rate limiter, player bootstrap).
+
+---
+Task ID: 0-b
+Agent: Z.ai Code (orchestrator — senior team role)
+Task: PHASE 0 (revision) — expand architecture into the full 12-view master specification, precise roadmap; no major implementation
+
+Work Log:
+- Re-inspected repository per instruction: clean tree at commit 9bb5825, 6 docs, api infra + types + health + console from 0-a, server healthy (db up, 1ms probe).
+- Rewrote docs/ARCHITECTURE.md as v2.0 MASTER with the 12 requested views (system, frontend, backend, database, telegram, authentication, battle, economy, notification, admin, security, deployment) + folder structure + hard module/dependency boundaries + cross-cutting strategy summary table. v1.0 preserved in git history.
+- New deep-dive documents:
+  - FRONTEND_ARCHITECTURE.md — single-route SPA shell, component layering, TanStack/Zustand split, query-key taxonomy + invalidation matrix, serverTime-anchored timers, Telegram SDK wrapper contract, UX/perf budgets, i18n (fa/en), a11y.
+  - BACKEND_ARCHITECTURE.md — runtime model, module dependency rules (engine purity contract), request lifecycle, 3-class error handling strategy, structured logging strategy, multi-layer caching strategy (Redis-ready, stampede-safe), phased WebSocket strategy (polling now, socket.io mini-service :3003 later, polling as permanent fallback), optional WORKER mode.
+  - TELEGRAM_ARCHITECTURE.md — webhook+long-poll pipeline, 9 command surface, /start payload grammar (referrals/campaigns), deep-link grammar, Mini App lifecycle contract, notification delivery queue with throttling + mute prefs, Telegram-specific security rules, explicit MVP non-goals.
+  - AUTHENTICATION.md — identity model, Flow A initData HMAC verification sequence (mermaid), Flow B env-guarded dev impersonation, Flow C admin login with allowlist, guard/failure code map, secrets summary.
+  - ECONOMY_ARCHITECTURE.md — principles, money types, SIX canonical transaction flows with sequence diagrams (production collect, upgrade spend, training+upkeep, battle loot transfer, market escrow fill, admin adjust), invariant table + enforcement, faucets/sinks inflation model, anti-exploit map.
+  - ADMIN_ARCHITECTURE.md — separate admin JWT + allowlist, console modules with safety rails, exploit-response runbook, MVP non-goals.
+- BATTLE_MODEL.md extended: authoritative 12-step mermaid sequence flow (client→API→service tx→engine→apply→notify) + March state machine with CAS resolver exclusivity (sweep/reconcile/worker idempotent vs each other) + attack-incoming early warning note.
+- ROADMAP.md rewritten as precise roadmap: per-phase task breakdowns with acceptance criteria, effort sizing (S/M/L), dependency graph (incl. parallelization notes: P9 core can start after P1, P8 panels ship incrementally), top-6 risk register with mitigations.
+- README doc table updated to the full 12-view set (12 documents incl. API_DESIGN).
+- Quality gate re-run: eslint ✓ tsc ✓ /api/health returns healthy/db up ✓. No production code changed in this revision (docs-only) per "no major implementation" instruction.
+
+Stage Summary:
+- Phase 0 now satisfies the expanded deliverable list: all 12 architectures, folder structure, module+dependency boundaries, entities+relationships (DATABASE_DESIGN ERD), initial API endpoints (API_DESIGN), WebSocket/caching/error/logging strategies, logical ERD, complete battle flow, economy transaction flows, precise roadmap.
+- Consistency kept with already-merged Phase 0 code (error codes ↔ errors.ts, envelope ↔ response.ts, endpoints ↔ API_DESIGN, schema ↔ prisma/schema.prisma).
+- Awaiting approval for PHASE 1 (Database & Authentication).

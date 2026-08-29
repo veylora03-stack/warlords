@@ -8,16 +8,22 @@ Build a city, raise armies, collect commanders, fight deterministic battles, con
 
 ---
 
-## Documentation (architecture-as-code)
+## Documentation (architecture-as-code — 12-view master set)
 
 | Document | Contents |
 |---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System overview, stack decisions, folder structure, game state model, engines, deployment |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Master**: 12 architecture views, folder structure, module & dependency boundaries, cross-cutting strategies |
+| [`docs/FRONTEND_ARCHITECTURE.md`](docs/FRONTEND_ARCHITECTURE.md) | Mini App SPA model, component layering, state split, Telegram SDK wrapper, UX system, performance budget |
+| [`docs/BACKEND_ARCHITECTURE.md`](docs/BACKEND_ARCHITECTURE.md) | Runtime model, dependency rules, request lifecycle, error/logging/caching/WebSocket strategies |
+| [`docs/API_DESIGN.md`](docs/API_DESIGN.md) | REST conventions, envelope, error taxonomy, full endpoint catalog, sequences |
 | [`docs/DATABASE_DESIGN.md`](docs/DATABASE_DESIGN.md) | ERD, 45-entity catalog, indexing strategy, transaction boundaries, PG migration notes |
-| [`docs/API_DESIGN.md`](docs/API_DESIGN.md) | REST conventions, error taxonomy, endpoint catalog, sequences |
-| [`docs/BATTLE_MODEL.md`](docs/BATTLE_MODEL.md) | Deterministic seeded battle simulation, counters, loot, protection rules |
+| [`docs/TELEGRAM_ARCHITECTURE.md`](docs/TELEGRAM_ARCHITECTURE.md) | Bot modes & commands, deep links, Mini App lifecycle, notification delivery pipeline |
+| [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) | initData verification, session JWT, dev impersonation, admin login — full sequence diagrams |
+| [`docs/BATTLE_MODEL.md`](docs/BATTLE_MODEL.md) | Deterministic seeded engine, complete attack sequence diagram, March state machine, counters/loot/protection |
+| [`docs/ECONOMY_ARCHITECTURE.md`](docs/ECONOMY_ARCHITECTURE.md) | Six canonical transaction flows with diagrams, invariants, faucets/sinks, anti-exploit map |
+| [`docs/ADMIN_ARCHITECTURE.md`](docs/ADMIN_ARCHITECTURE.md) | Admin access model, console modules, audit guarantees, operational runbooks |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Telegram auth, anti-cheat matrix, RBAC, idempotency, secrets |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phase contracts 0–13 with exit criteria |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Precise phase contracts 0–13, task breakdowns, dependency graph, risk register |
 
 ## Tech Stack
 
