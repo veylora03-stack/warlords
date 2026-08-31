@@ -56,9 +56,17 @@ interface TelegramApiResponse {
  * Sends one message through the Telegram Bot API. Throws
  * TelegramDeliveryError on any failure with `retryable` set so the worker
  * can decide between backoff-retry and terminal FAILED.
+ *
+ * `replyMarkup` (Phase 26) carries an inline keyboard (e.g. the Mini App
+ * web_app button) — optional, so the notification engine path is unchanged.
  */
 export async function sendTelegramMessage(
-  input: { token: string; chatId: string; text: string },
+  input: {
+    token: string
+    chatId: string
+    text: string
+    replyMarkup?: object
+  },
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const url = `${TELEGRAM_API_BASE}/bot${input.token}/sendMessage`
@@ -71,6 +79,7 @@ export async function sendTelegramMessage(
         chat_id: input.chatId,
         text: input.text,
         disable_web_page_preview: true,
+        ...(input.replyMarkup !== undefined ? { reply_markup: input.replyMarkup } : {}),
       }),
       signal: AbortSignal.timeout(NOTIFICATION_POLICY.telegramHttpTimeoutMs),
     })

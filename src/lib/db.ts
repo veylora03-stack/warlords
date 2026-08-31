@@ -1,9 +1,20 @@
 import { PrismaClient } from '@prisma/client'
+import { getEnvSafe } from '@/config/env'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
   prismaWrite: PrismaClient | undefined
 }
+
+/**
+ * Production-safe logging gate (Phase 26): the per-query log fires on EVERY
+ * read in dev (invaluable for N+1 hunts) but must be silent in production —
+ * it would flood stdout/JSON log streams, leak query shapes/params, and
+ * cost measurable CPU at load. Production keeps only error + warn events.
+ */
+const prismaReadLogLevel = getEnvSafe()?.isProd
+  ? (['error', 'warn'] as const)
+  : (['query'] as const)
 
 /**
  * READ client — every plain query goes through here. It carries the query
@@ -13,7 +24,7 @@ const globalForPrisma = globalThis as unknown as {
 export const db =
   globalForPrisma.prisma ??
   new PrismaClient({
-    log: ['query'],
+    log: [...prismaReadLogLevel],
   })
 
 /**

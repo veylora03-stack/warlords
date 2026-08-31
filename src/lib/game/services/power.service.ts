@@ -29,7 +29,10 @@ import {
  * army/city data instead of issuing three more queries.
  */
 export function computePowerFromRows(
-  stacks: Array<{ count: number; unit: { attack: number; defense: number; health: number; tier: number } }>,
+  stacks: Array<{
+    count: number
+    unit: { attack: number; defense: number; health: number; tier: number }
+  }>,
   buildings: Array<{ type: string; level: number }>,
   techs: Array<{ level: number; technology: { branch: string } }>,
 ): PowerBreakdown {

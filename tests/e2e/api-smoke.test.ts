@@ -86,3 +86,37 @@ describe.skipIf(!serverReachable)('GET / (console shell)', () => {
     expect(html).toContain('WARLORDS')
   })
 })
+
+describe.skipIf(!serverReachable)('Phase 26 deployment probes', () => {
+  it('GET /health — liveness: 200, dependency-free body, no-store', async () => {
+    const res = await fetch(`${BASE_URL}/health`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toContain('no-store')
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['status']).toBe('ok')
+    expect(body['app']).toBe('warlords')
+    expect(body['db']).toBeUndefined()
+  })
+
+  it('GET /ready — readiness: 200 ready with a real DB round-trip', async () => {
+    const res = await fetch(`${BASE_URL}/ready`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      status: string
+      checks: { db: { status: string }; config: { status: string } }
+    }
+    expect(body.status).toBe('ready')
+    expect(body.checks.db.status).toBe('up')
+  })
+
+  it('POST /api/v1/telegram/webhook — unauthenticated callers are rejected', async () => {
+    const res = await fetch(`${BASE_URL}/api/v1/telegram/webhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ update_id: 1 }),
+    })
+    // 401 (secret mismatch) on a configured transport, 503 (unconfigured) on
+    // sandbox — both are the typed contracts; everything else is a defect.
+    expect([401, 503]).toContain(res.status)
+  })
+})

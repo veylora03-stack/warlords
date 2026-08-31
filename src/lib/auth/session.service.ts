@@ -118,7 +118,8 @@ async function issueSession(args: IssueSessionArgs): Promise<ExchangeResult> {
   const result = await withRegistrationLock(() =>
     withWriteRetry(
       () =>
-        dbWrite.$transaction(async (tx) => {
+        dbWrite
+          .$transaction(async (tx) => {
             // 1) Identity upsert — telegramId is THE identity; username is display-only.
             const user = await tx.user.upsert({
               where: { telegramId: args.telegramId },

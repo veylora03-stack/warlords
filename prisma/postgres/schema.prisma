@@ -1,0 +1,1179 @@
+// ============================================================================
+// WARLORDS — Prisma Schema (Phase 2: database foundation — migrated baseline)
+// ----------------------------------------------------------------------------
+// Dev driver: SQLite (sandbox). Production target: PostgreSQL (Supabase).
+// The schema is PG-compatible: no connector-specific behavior; enum-like values
+// are enforced at the application layer (Zod + TS unions) because Prisma enums
+// are not supported on SQLite. At deploy time: flip datasource provider to
+// "postgresql" and cut a fresh PG baseline (docs/DATABASE_DESIGN.md §migrations).
+// Money/resources/power/HP use BigInt (64-bit) — see docs/ARCHITECTURE.md §4.4.
+// Percentages/ratios are basis points (integers).
+//
+// Table-name contract (Phase 2): users, players, cities, buildings, resources,
+// resource_transactions, units, player_units, commanders, items, inventory,
+// technologies, player_technologies, territories, battles, battle_rounds,
+// battle_logs, quests, player_quests, achievements, clans, clan_members,
+// clan_wars, market_orders, market_transactions, seasons, leaderboards,
+// notifications, events, admin_users, audit_logs (+ support tables).
+//
+// Relation policy:
+//  - owned instance data (units, quests, buildings, notifications…) → Cascade
+//  - historical/ledger records (battles, market txs, audit logs)     → Restrict
+//  - catalog FKs (unit/item/tech/quest/commander/achievement)        → Restrict
+//    (catalogs are soft-disabled via isActive, never hard-deleted)
+//  - optional soft references                                        → SetNull
+//  - append-only tables carry createdAt only; mutable tables carry both timestamps
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────────────────────────────────────── IDENTITY ─────
+
+model User {
+  id           String    @id @default(cuid())
+  telegramId   String    @unique // int64 as string — username is NEVER identity
+  username     String?
+  firstName    String
+  lastName     String?
+  languageCode String    @default("en")
+  photoUrl     String?
+  role         String    @default("USER") // USER | ADMIN | SUPERADMIN
+  isBanned     Boolean   @default(false)
+  banReason    String?
+  bannedAt     DateTime?
+  banExpiresAt DateTime?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  player        Player?
+  auditLogs     AuditLog[] @relation("AuditActor")
+  announcements Announcement[]
+  adminRecord   AdminUser?
+  authSessions  AuthSession[]
+
+  @@map("users")
+}
+
+// One server-side session per verified initData exchange. The row is the
+// revocation/audit authority; the JWT itself only carries pointers (sub, sid).
+model AuthSession {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // sha256(raw initData) — a replayed initData re-attaches to this row instead
+  // of minting a second session (unique = one live session per initData).
+  initDataHash     String    @unique
+  // sha256(session JWT) — the raw token is never persisted.
+  tokenHash        String    @unique
+  telegramAuthDate DateTime
+  issuedIp         String?
+  userAgent        String?
+  lastUsedAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, expiresAt])
+  @@map("auth_sessions")
+}
+
+// ─────────────────────────────────────────────── PLAYER & ECONOMY CORE ──────
+
+model Player {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  name            String
+  avatarUrl       String?
+  level           Int       @default(1)
+  xp              BigInt    @default(0)
+  power           BigInt    @default(0)
+  honor           BigInt    @default(0)
+  reputation      String    @default("NEUTRAL") // HONORABLE|TRUSTED|NEUTRAL|DANGEROUS|RUTHLESS|TYRANT
+  reputationScore Int       @default(0)
+  gems            BigInt    @default(0)
+  energy          Int       @default(100)
+  energyUpdatedAt DateTime  @default(now())
+  seasonPoints    Int       @default(0)
+  activeTitleId   String? // equipped cosmetic title (permanent progression)
+  stats           Json? // aggregate counters (battlesWon, resourcesPlundered, …)
+  clanId          String? // denormalized from ClanMember — kept in sync in-tx
+  clanRole        String? // LEADER | OFFICER | MEMBER
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user                  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet                ResourceWallet?
+  transactions          ResourceTransaction[]
+  city                  City?
+  clan                  Clan?               @relation("PlayerClan", fields: [clanId], references: [id])
+  ledClans              Clan[]              @relation("ClanLeader")
+  clanMembership        ClanMember?
+  units                 PlayerUnit[]
+  trainingQueue         TrainingQueueItem[]
+  commanders            PlayerCommander[]
+  inventory             InventoryItem[]
+  technologies          PlayerTechnology[]
+  quests                PlayerQuest[]
+  achievements          PlayerAchievement[]
+  marches               March[]             @relation("MarchOwner")
+  marchesTargetingMe    March[]             @relation("MarchTarget")
+  territories           Territory[]         @relation("TerritoryOwner")
+  battlesAsAttacker     Battle[]            @relation("BattleAttacker")
+  battlesAsDefender     Battle[]            @relation("BattleDefender")
+  battleLogs            BattleLog[]
+  scoutReportsSent      ScoutReport[]       @relation("ScoutAttacker")
+  scoutReportsReceived  ScoutReport[]       @relation("ScoutTarget")
+  notifications         Notification[]
+  invitations           ClanInvitation[]    @relation("InviteInvitee")
+  invitationsSent       ClanInvitation[]    @relation("InviteInvitor")
+  clanMessages          ClanMessage[]
+  marketOrders          MarketOrder[]
+  marketPurchases       MarketTransaction[] @relation("MarketBuyer")
+  marketSales           MarketTransaction[] @relation("MarketSeller")
+  leaderboardSnapshots  Leaderboard[]
+  bossDamages           WorldBossDamage[]
+  warParticipations     ClanWarParticipation[]
+  targetedEvents        GameEvent[]         @relation("EventTarget")
+  spyMissionsRun        SpyMission[]        @relation("SpyOwner")
+  spyMissionsAgainstMe  SpyMission[]        @relation("SpyTarget")
+  titles                PlayerTitle[]
+  activeTitle           Title?              @relation("PlayerActiveTitle", fields: [activeTitleId], references: [id], onDelete: SetNull)
+  cosmetics             PlayerCosmetic[]
+  seasonWallets         SeasonWallet[]
+  seasonRewardClaims    SeasonRewardClaim[]
+  queuedNotifications   NotificationQueue[]
+
+  @@index([power])
+  @@index([honor])
+  @@index([clanId])
+  @@index([seasonPoints])
+  @@index([name]) // admin player search
+  @@map("players")
+}
+
+model ResourceWallet {
+  id                String   @id @default(cuid())
+  playerId          String   @unique
+  gold              BigInt   @default(0)
+  wood              BigInt   @default(0)
+  iron              BigInt   @default(0)
+  food              BigInt   @default(0)
+  crystal           BigInt   @default(0)
+  capacityUpdatedAt DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@map("resources")
+}
+
+/// Immutable ledger — every economic delta appends here. Wallets are the cache; this is the truth.
+model ResourceTransaction {
+  id           String   @id @default(cuid())
+  playerId     String
+  resource     String // GOLD|WOOD|IRON|FOOD|CRYSTAL|GEMS|ENERGY
+  delta        BigInt // signed
+  balanceAfter BigInt
+  reason       String // quest_reward|building_upgrade|battle_loot|market_buy|admin_adjust|…
+  refType      String? // polymorphic reference, e.g. "building"
+  refId        String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, createdAt])
+  @@index([playerId, reason])
+  @@map("resource_transactions")
+}
+
+// ─────────────────────────────────────────────────────── CITY & BUILDINGS ───
+
+model City {
+  id        String   @id @default(cuid())
+  playerId  String   @unique
+  name      String
+  x         Int
+  y         Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player    Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  buildings Building[]
+  territory Territory?
+
+  @@unique([x, y])
+  @@map("cities")
+}
+
+model Building {
+  id                  String   @id @default(cuid())
+  cityId              String
+  type                String // TOWN_HALL|BARRACKS|ARCHER_CAMP|STABLE|ARMORY|HOSPITAL|FARM|WOOD_MILL|IRON_MINE|GOLD_MINE|ACADEMY|SCOUT_CENTER|SPY_CENTER|WAREHOUSE|MARKET|WALL|CASTLE
+  level               Int      @default(1)
+  isConstructing      Boolean  @default(false)
+  upgradeStartedAt    DateTime?
+  upgradeCompletesAt  DateTime?
+  pendingLevel        Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@unique([cityId, type]) // one building per type per city
+  @@index([upgradeCompletesAt])
+  @@map("buildings")
+}
+
+// ─────────────────────────────────────────────────────────────────── ARMY ───
+
+/// Catalog (seeded from src/lib/game/config). Balance changes never touch this schema.
+model Unit {
+  id            String  @id // slug, e.g. "swordsman"
+  name          String
+  class         String // INFANTRY|RANGED|CAVALRY|SIEGE
+  tier          Int     @default(1)
+  attack        Int
+  defense       Int
+  health        Int
+  speed         Int
+  foodUpkeep    Int // food consumed per hour per unit
+  carryCapacity Int     @default(0) // loot capacity
+  trainingCost  Json // { GOLD: 100, FOOD: 50, IRON: 20 } (absolute amounts)
+  trainingTimeSec Int
+  trainingBuilding String // BARRACKS|ARCHER_CAMP|STABLE|ARMORY (Phase 7)
+  requiredBuildingLevel Int @default(1) // min level of the training building
+  strongAgainst Json? // [{ unitId, bonusBps }] — data-driven counters
+  weakAgainst   Json? // [{ unitId, penaltyBps }] — data-driven counters
+  description   String?
+  isActive      Boolean @default(true) // soft-retire instead of hard delete (Restrict FKs)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  playerUnits    PlayerUnit[]
+  trainingQueues TrainingQueueItem[]
+
+  @@index([class, tier])
+  @@map("units")
+}
+
+model PlayerUnit {
+  id        String   @id @default(cuid())
+  playerId  String
+  unitId    String
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, unitId])
+  @@index([unitId])
+  @@map("player_units")
+}
+
+model TrainingQueueItem {
+  id          String   @id @default(cuid())
+  playerId    String
+  unitId      String
+  count       Int
+  startedAt   DateTime @default(now())
+  completesAt DateTime
+  status      String   @default("TRAINING") // TRAINING|DONE|CANCELLED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([playerId, completesAt])
+  @@index([playerId, status])
+  @@map("training_queue_items")
+}
+
+/// Army movement (attack/scout/reinforce/return). Resolution creates a Battle.
+model March {
+  id             String   @id @default(cuid())
+  playerId       String
+  targetPlayerId String?
+  territoryId    String?
+  bossId         String?
+  type           String // ATTACK|SCOUT|REINFORCE|RETURN
+  units          Json // snapshot of committed stacks
+  departedAt     DateTime @default(now())
+  arrivesAt      DateTime
+  status         String   @default("EN_ROUTE") // EN_ROUTE|RESOLVING|RETURNING|ARRIVED|CANCELLED
+  battleId       String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  player       Player      @relation("MarchOwner", fields: [playerId], references: [id], onDelete: Cascade)
+  targetPlayer Player?     @relation("MarchTarget", fields: [targetPlayerId], references: [id], onDelete: SetNull)
+  territory    Territory?  @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  battle       Battle?     @relation(fields: [battleId], references: [id], onDelete: SetNull)
+
+  @@index([arrivesAt, status])
+  @@index([playerId, status])
+  @@index([territoryId])
+  @@map("marches")
+}
+
+// ────────────────────────────────────── COMMANDERS, ITEMS & EQUIPMENT ───────
+
+/// Catalog (seeded from config).
+model Commander {
+  id           String  @id // slug, e.g. "iron-general"
+  name         String
+  rarity       String // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+  baseStats    Json // { attackBps, defenseBps, healthBps, ... }
+  skills       Json // active skills with cooldowns
+  passive      Json // passive bonuses (basis points)
+  lore         String?
+  /// Seasonal commanders are WIPED at season reset; permanent ones survive.
+  isSeasonal   Boolean @default(false)
+  isActive     Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  playerCommanders PlayerCommander[]
+
+  @@map("commanders")
+}
+
+model PlayerCommander {
+  id          String   @id @default(cuid())
+  playerId    String
+  commanderId String
+  level       Int      @default(1)
+  xp          Int      @default(0)
+  unlockedAt  DateTime @default(now())
+
+  player    Player               @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  commander Commander            @relation(fields: [commanderId], references: [id], onDelete: Restrict)
+  equipment CommanderEquipment[]
+
+  @@unique([playerId, commanderId])
+  @@map("player_commanders")
+}
+
+/// Catalog: equipment & consumables (seeded from config).
+model Item {
+  id          String  @id // slug
+  name        String
+  slot        String // WEAPON|ARMOR|HELMET|RING|AMULET|CONSUMABLE|CHEST
+  rarity      String // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+  stats       Json // { attack, defense, health, speed } absolute or bps
+  effects     Json? // resource/combat bonus effects
+  stackable   Boolean @default(false)
+  sellable    Boolean @default(true)
+  basePrice   BigInt?
+  description String?
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  inventoryItems InventoryItem[]
+  equipmentBinds CommanderEquipment[]
+
+  @@map("items")
+}
+
+model InventoryItem {
+  id        String   @id @default(cuid())
+  playerId  String
+  itemId    String
+  quantity  Int      @default(1)
+  acquiredAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, itemId])
+  @@map("inventory")
+}
+
+/// Slot-bound equipment on a commander instance.
+model CommanderEquipment {
+  id                 String   @id @default(cuid())
+  playerCommanderId  String
+  slot               String // WEAPON|ARMOR|HELMET|RING|AMULET
+  itemId             String
+  equippedAt         DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  playerCommander PlayerCommander @relation(fields: [playerCommanderId], references: [id], onDelete: Cascade)
+  item            Item            @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@unique([playerCommanderId, slot])
+  @@map("commander_equipment")
+}
+
+// ──────────────────────────────────────────────────────── TECHNOLOGY ────────
+
+/// Catalog incl. prerequisites (seeded from config).
+model Technology {
+  id                     String  @id // slug
+  name                   String
+  branch                 String // MILITARY|ECONOMY|DEFENSE|SCIENCE|SCOUTING
+  tier                   Int     @default(1)
+  maxLevel               Int     @default(1)
+  prerequisites          Json? // [{ technologyId, level }]
+  costPerLevel           Json
+  effectsPerLevel        Json // per-level bonuses (basis points)
+  researchTimeSecPerLevel Int
+  description            String?
+  isActive               Boolean @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  playerTechnologies PlayerTechnology[]
+
+  @@index([branch, tier])
+  @@map("technologies")
+}
+
+model PlayerTechnology {
+  id                  String   @id @default(cuid())
+  playerId            String
+  technologyId        String
+  level               Int      @default(0)
+  researching         Boolean  @default(false)
+  researchCompletesAt DateTime?
+  updatedAt           DateTime @updatedAt
+
+  player     Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, technologyId])
+  @@index([researchCompletesAt])
+  @@map("player_technologies")
+}
+
+// ─────────────────────────────────────── WORLD, TERRITORY & COMBAT ──────────
+
+model Territory {
+  id              String   @id @default(cuid())
+  x               Int
+  y               Int
+  type            String // PLAYER_CITY|NPC_VILLAGE|RESOURCE_ZONE|MINE|FOREST|MOUNTAIN|BOSS_ZONE|SPECIAL
+  ownerPlayerId   String?
+  cityId          String?  @unique // 1:1 anchor for player capitals
+  defenseStrength Int      @default(0)
+  production      Json? // bonus yields when held
+  strategicValue  Int      @default(0)
+  lastCapturedAt  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  ownerPlayer  Player?       @relation("TerritoryOwner", fields: [ownerPlayerId], references: [id], onDelete: SetNull)
+  city         City?         @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  marches      March[]
+  battles      Battle[]
+  scoutReports ScoutReport[]
+
+  @@unique([x, y])
+  @@index([ownerPlayerId])
+  @@map("territories")
+}
+
+/// One engagement. Deterministic: (seed, configVersion, inputs) ⇒ identical outcome.
+model Battle {
+  id               String   @id @default(cuid())
+  type             String // PVP_ATTACK|PVE|TERRITORY_ASSAULT|SCOUT|BOSS_RAID
+  seed             Int // deterministic PRNG seed
+  configVersion    Int // battle config snapshot version
+  attackerPlayerId String
+  defenderPlayerId String?
+  territoryId      String?
+  bossId           String?
+  marchId          String?  @unique
+  result           String // ATTACKER_WIN|DEFENDER_WIN|DRAW
+  attackerPower    BigInt   @default(0)
+  defenderPower    BigInt   @default(0)
+  roundsCount      Int      @default(0)
+  loot             Json? // { GOLD: n, WOOD: n, ... }
+  honorDelta       Int      @default(0)
+  reputationDelta  Int      @default(0)
+  energySpent      Int      @default(0)
+  startedAt        DateTime @default(now())
+  endedAt          DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  attacker  Player     @relation("BattleAttacker", fields: [attackerPlayerId], references: [id], onDelete: Restrict)
+  defender  Player?    @relation("BattleDefender", fields: [defenderPlayerId], references: [id], onDelete: SetNull)
+  territory Territory? @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  boss      WorldBoss? @relation(fields: [bossId], references: [id], onDelete: SetNull)
+  march    March?
+  rounds   BattleRound[]
+  logs     BattleLog[]
+
+  @@index([attackerPlayerId, createdAt])
+  @@index([defenderPlayerId, createdAt])
+  @@map("battles")
+}
+
+model BattleRound {
+  id             String   @id @default(cuid())
+  battleId       String
+  roundNumber    Int
+  side           String // ATTACKER|DEFENDER
+  unitsCommitted Json
+  unitsLost      Json
+  damageDealt    BigInt   @default(0)
+  events         Json? // ordered action trace for the round
+  createdAt      DateTime @default(now())
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, roundNumber, side])
+  @@map("battle_rounds")
+}
+
+/// Per-participant pre-formatted battle report (inbox row).
+model BattleLog {
+  id        String   @id @default(cuid())
+  battleId  String
+  playerId  String
+  role      String // ATTACKER|DEFENDER|CLANMATE
+  content   Json // rendered report payload
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, createdAt])
+  @@map("battle_logs")
+}
+
+model ScoutReport {
+  id              String   @id @default(cuid())
+  attackerPlayerId String
+  targetPlayerId  String?
+  territoryId     String?
+  data            Json // army/resource/defense/tech intel snapshot
+  success         Boolean  @default(true)
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  attacker   Player     @relation("ScoutAttacker", fields: [attackerPlayerId], references: [id], onDelete: Cascade)
+  target     Player?    @relation("ScoutTarget", fields: [targetPlayerId], references: [id])
+  territory  Territory? @relation(fields: [territoryId], references: [id])
+
+  @@index([attackerPlayerId, createdAt])
+  @@index([targetPlayerId, expiresAt])
+  @@map("scout_reports")
+}
+
+// ─────────────────────────────────────────── QUESTS & ACHIEVEMENTS ──────────
+
+/// Catalog (seeded from config).
+model Quest {
+  id                  String  @id // slug
+  type                String // MAIN|DAILY|WEEKLY|ACHIEVEMENT|CLAN|EVENT
+  title               String
+  description         String
+  objectiveType       String // BUILD_UPGRADE|TRAIN_UNITS|COLLECT_RESOURCE|WIN_BATTLES|SPEND_RESOURCE|REACH_POWER|JOIN_CLAN|SCOUT_TARGET|…
+  objectiveTarget     Json // { unitId?, buildingType?, resource?, amount } — engine-matched
+  reward              Json // { GOLD?: n, XP?: n, GEMS?: n, ITEM?: id, COMMANDER?: id, ENERGY?: n }
+  prerequisiteQuestIds Json? // chain gating for MAIN quests
+  repeatable          Boolean @default(false)
+  cooldownHours       Int     @default(0)
+  isActive            Boolean @default(true)
+  sortOrder           Int     @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  playerQuests PlayerQuest[]
+
+  @@index([type, sortOrder])
+  @@map("quests")
+}
+
+/// Repeating quests create new rows (no unique on (playerId, questId)).
+model PlayerQuest {
+  id         String    @id @default(cuid())
+  playerId   String
+  questId    String
+  progress   Int       @default(0)
+  target     Int       @default(1)
+  status     String    @default("ACTIVE") // ACTIVE|COMPLETED|CLAIMED|EXPIRED
+  assignedAt DateTime  @default(now())
+  expiresAt  DateTime?
+  completedAt DateTime?
+  claimedAt  DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  quest  Quest  @relation(fields: [questId], references: [id], onDelete: Restrict)
+
+  @@index([playerId, status])
+  @@map("player_quests")
+}
+
+model Achievement {
+  id          String @id // slug
+  title       String
+  description String
+  category    String // PROGRESS|MILITARY|ECONOMY|SOCIAL|COLLECTION
+  target      Int    @default(1)
+  reward      Json
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  playerAchievements PlayerAchievement[]
+
+  @@map("achievements")
+}
+
+model PlayerAchievement {
+  id            String   @id @default(cuid())
+  playerId      String
+  achievementId String
+  unlockedAt    DateTime @default(now())
+
+  player      Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, achievementId])
+  @@map("player_achievements")
+}
+
+// ────────────────────────────────────────────────────────────────── CLAN ────
+
+model Clan {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  tag           String   @unique // 2–5 chars
+  description   String?
+  emblemUrl     String?
+  leaderPlayerId String
+  level         Int      @default(1)
+  xp            BigInt   @default(0)
+  trophies      Int      @default(0)
+  memberCount   Int      @default(1) // denormalized — updated in-tx
+  treasury      Json? // donated resources
+  settings      Json? // { joinPolicy, minPower, warPreference, ... }
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  leader          Player              @relation("ClanLeader", fields: [leaderPlayerId], references: [id], onDelete: Restrict)
+  members         ClanMember[]
+  playerMembers   Player[]            @relation("PlayerClan")
+  invitations     ClanInvitation[]
+  messages        ClanMessage[]
+  warsDeclared    ClanWar[]           @relation("ClanWarAttacker")
+  warsReceived    ClanWar[]           @relation("ClanWarDefender")
+  warsWon         ClanWar[]           @relation("ClanWarWinner")
+  announcements   Announcement[]
+
+  @@map("clans")
+}
+
+model ClanMember {
+  id           String   @id @default(cuid())
+  clanId       String
+  playerId     String   @unique // ≤ 1 clan per player
+  role         String   @default("MEMBER") // LEADER|OFFICER|MEMBER
+  contribution Int      @default(0)
+  joinedAt     DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  clan   Clan   @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([clanId])
+  @@map("clan_members")
+}
+
+model ClanInvitation {
+  id          String   @id @default(cuid())
+  clanId      String
+  playerId    String
+  invitedById String
+  status      String   @default("PENDING") // PENDING|ACCEPTED|DECLINED|EXPIRED|CANCELLED
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  clan      Clan   @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  player    Player @relation("InviteInvitee", fields: [playerId], references: [id], onDelete: Cascade)
+  invitedBy Player @relation("InviteInvitor", fields: [invitedById], references: [id])
+
+  @@index([playerId, status])
+  @@map("clan_invitations")
+}
+
+model ClanMessage {
+  id             String   @id @default(cuid())
+  clanId         String
+  senderPlayerId String
+  content        String
+  createdAt      DateTime @default(now())
+
+  clan        Clan   @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  senderPlayer Player @relation(fields: [senderPlayerId], references: [id], onDelete: Cascade)
+
+  @@index([clanId, createdAt])
+  @@map("clan_messages")
+}
+
+model ClanWar {
+  id             String   @id @default(cuid())
+  attackerClanId String
+  defenderClanId String
+  status         String   @default("DECLARED") // DECLARED|PREPARATION|BATTLE|FINISHED|CANCELLED
+  declaredAt     DateTime @default(now())
+  startsAt       DateTime
+  endsAt         DateTime
+  scoreAttacker  Int      @default(0)
+  scoreDefender  Int      @default(0)
+  winnerClanId   String?
+  config         Json? // phase durations, scoring rules
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  attackerClan Clan                   @relation("ClanWarAttacker", fields: [attackerClanId], references: [id], onDelete: Restrict)
+  defenderClan Clan                   @relation("ClanWarDefender", fields: [defenderClanId], references: [id], onDelete: Restrict)
+  winnerClan   Clan?                  @relation("ClanWarWinner", fields: [winnerClanId], references: [id], onDelete: SetNull)
+  participations ClanWarParticipation[]
+
+  @@index([status, endsAt])
+  @@map("clan_wars")
+}
+
+model ClanWarParticipation {
+  id       String @id @default(cuid())
+  warId    String
+  playerId String
+  points   Int    @default(0)
+  battles  Int    @default(0)
+
+  war    ClanWar @relation(fields: [warId], references: [id], onDelete: Cascade)
+  player Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([warId, playerId])
+  @@map("clan_war_participations")
+}
+
+// ───────────────────────────────────────────── MARKET, SEASON, RANKING ──────
+
+model MarketOrder {
+  id             String   @id @default(cuid())
+  sellerPlayerId String
+  orderType      String   @default("SELL") // SELL|BUY
+  itemId         String? // item trade (XOR resource)
+  resource       String? // GOLD|WOOD|IRON|FOOD|CRYSTAL (XOR item)
+  unitPrice      BigInt // price per unit, in GOLD
+  quantity       Int
+  filledQuantity Int      @default(0)
+  status         String   @default("OPEN") // OPEN|PARTIAL|FILLED|CANCELLED|EXPIRED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  expiresAt      DateTime?
+
+  seller       Player               @relation(fields: [sellerPlayerId], references: [id], onDelete: Restrict)
+  transactions MarketTransaction[]
+
+  @@index([status, createdAt])
+  @@map("market_orders")
+}
+
+model MarketTransaction {
+  id             String   @id @default(cuid())
+  orderId        String
+  buyerPlayerId  String
+  sellerPlayerId String
+  itemId         String?
+  resource       String?
+  quantity       Int
+  unitPrice      BigInt
+  total          BigInt
+  fee            BigInt   @default(0)
+  createdAt      DateTime @default(now())
+
+  order  MarketOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  buyer  Player      @relation("MarketBuyer", fields: [buyerPlayerId], references: [id], onDelete: Restrict)
+  seller Player      @relation("MarketSeller", fields: [sellerPlayerId], references: [id], onDelete: Restrict)
+
+  @@index([buyerPlayerId, createdAt])
+  @@index([sellerPlayerId, createdAt])
+  @@map("market_transactions")
+}
+
+model Season {
+  id        String   @id @default(cuid())
+  number    Int      @unique
+  name      String
+  startsAt  DateTime
+  endsAt    DateTime
+  status    String   @default("UPCOMING") // UPCOMING|ACTIVE|FINISHED
+  /// Set when the transactional reset ran — the at-most-once settlement claim.
+  settledAt DateTime?
+  /// Rules/rewards snapshot taken at creation (data-driven from config).
+  config    Json? // duration, reward tiers, reset policy
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapshots    Leaderboard[]
+  rewardClaims SeasonRewardClaim[]
+  wallets      SeasonWallet[]
+
+  @@index([status, endsAt])
+  @@map("seasons")
+}
+
+/// Per-player season settlement payout. Created by the reset transaction for
+/// every reward-tier finisher; claimed at most once (claimedAt conditional).
+model SeasonRewardClaim {
+  id          String    @id @default(cuid())
+  seasonId    String
+  playerId    String
+  rank        Int
+  score       Int
+  tierName    String
+  rewards     Json // resource payout { GOLD, CRYSTAL, ... } (numbers)
+  claimedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, playerId])
+  @@index([playerId, claimedAt])
+  @@map("season_reward_claims")
+}
+
+/// Season-scoped currency wallet — wiped by the season reset (seasonal).
+model SeasonWallet {
+  id        String   @id @default(cuid())
+  seasonId  String
+  playerId  String
+  shards    BigInt   @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, playerId])
+  @@map("season_wallets")
+}
+
+/// Permanent-progression catalog (seeded from config). Survives resets.
+model Cosmetic {
+  id       String  @id // slug
+  name     String
+  kind     String // AVATAR_FRAME|BANNER|CITY_THEME|EMBLEM
+  rarity   String // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+  source   String // SEASON_RANK|ACHIEVEMENT|SHOP
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owners PlayerCosmetic[]
+
+  @@map("cosmetics")
+}
+
+model PlayerCosmetic {
+  id             String   @id @default(cuid())
+  playerId       String
+  cosmeticId     String
+  acquiredSeason Int?
+  unlockedAt     DateTime @default(now())
+
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  cosmetic Cosmetic @relation(fields: [cosmeticId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, cosmeticId])
+  @@index([playerId, unlockedAt])
+  @@map("player_cosmetics")
+}
+
+/// Permanent-progression catalog (seeded from config). Survives resets.
+model Title {
+  id        String  @id // slug
+  name      String
+  rarity    String // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+  source    String // SEASON_RANK|ACHIEVEMENT|SHOP
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owners    PlayerTitle[]
+  activeFor Player[]       @relation("PlayerActiveTitle")
+
+  @@map("titles")
+}
+
+model PlayerTitle {
+  id             String   @id @default(cuid())
+  playerId       String
+  titleId        String
+  acquiredSeason Int?
+  unlockedAt     DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  title  Title  @relation(fields: [titleId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, titleId])
+  @@index([playerId, unlockedAt])
+  @@map("player_titles")
+}
+
+/// Materialized ranking rows. Recomputed by the ranking sweep; history per season.
+model Leaderboard {
+  id        String   @id @default(cuid())
+  seasonId  String?
+  category  String // POWER|MILITARY|WEALTH|TERRITORY|HONOR|CLAN|BOSS_DAMAGE
+  period    String // WEEKLY|SEASONAL|ALL_TIME
+  playerId  String
+  rank      Int
+  score     BigInt
+  rewards   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season? @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  player Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([category, period, rank])
+  @@index([seasonId])
+  @@map("leaderboards")
+}
+
+// ────────────────────────────────────── BOSSES, EVENTS, SOCIAL ──────────────
+
+model WorldBoss {
+  id         String   @id @default(cuid())
+  name       String
+  maxHp      BigInt
+  currentHp  BigInt
+  spawnedAt  DateTime @default(now())
+  endsAt     DateTime
+  status     String   @default("SPAWNED") // SPAWNED|DEFEATED|ESCAPED
+  config     Json? // schedule, reward tiers
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  battles    Battle[]
+  damages    WorldBossDamage[]
+
+  @@map("world_bosses")
+}
+
+model WorldBossDamage {
+  id        String   @id @default(cuid())
+  bossId    String
+  playerId  String
+  damage    BigInt   @default(0)
+  hits      Int      @default(0)
+  lastHitAt DateTime @default(now())
+
+  boss   WorldBoss @relation(fields: [bossId], references: [id], onDelete: Cascade)
+  player Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([bossId, playerId])
+  @@index([bossId, damage])
+  @@map("world_boss_damages")
+}
+
+/// Server-driven random/scheduled events.
+model GameEvent {
+  id             String   @id @default(cuid())
+  type           String // GOLD_RUSH|BANDIT_ATTACK|PLAGUE|FIRE|MERCHANT_FLEET|RARE_METEOR|NPC_INVASION|…
+  title          String? // operator-facing label (admin event management)
+  body           String? // operator-facing description
+  scope          String   @default("GLOBAL") // GLOBAL|PLAYER|CLAN
+  targetPlayerId String?
+  startsAt       DateTime @default(now())
+  endsAt         DateTime
+  config         Json? // effect magnitudes (bps), spawn tables
+  status         String   @default("SCHEDULED") // SCHEDULED|ACTIVE|FINISHED|CANCELLED
+  createdById    String? // admin user who spawned the event (audit companion)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  targetPlayer Player? @relation("EventTarget", fields: [targetPlayerId], references: [id], onDelete: SetNull)
+
+  @@index([status, endsAt])
+  @@index([targetPlayerId])
+  @@map("events")
+}
+
+/// Notification outbox — IN_APP polling + BOT delivery.
+model Notification {
+  id           String   @id @default(cuid())
+  playerId     String
+  type         String // ATTACK_INCOMING|ATTACK_RESULT|CONSTRUCTION_COMPLETE|TRAINING_COMPLETE|QUEST_COMPLETED|REWARD|CLAN_INVITE|CLAN_WAR|WORLD_BOSS|EVENT|RANK_CHANGE
+  title        String
+  body         String
+  data         Json? // deep-link payload
+  isRead       Boolean  @default(false)
+  deliveredVia String   @default("IN_APP") // IN_APP|BOT|BOTH
+  createdAt    DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, isRead, createdAt])
+  @@map("notifications")
+}
+
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  audience    String   @default("ALL") // ALL|CLAN|PLAYER
+  clanId      String?
+  isActive    Boolean  @default(true)
+  createdById String
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  clan      Clan? @relation(fields: [clanId], references: [id], onDelete: SetNull)
+
+  @@map("announcements")
+}
+
+/// Durable notification OUTBOX (Phase 22). Producers enqueue INSIDE the game
+/// transaction that caused the event (at-least-once); a worker claims rows
+/// with an atomic status flip, renders the catalog template server-side and
+/// delivers through the channel adapters (IN_APP inbox + Telegram Bot API).
+///
+/// Deduplication: @@unique([playerId, type, dedupeKey]) — the dedupeKey
+/// carries the EVENT IDENTITY (e.g. "construction:{buildingId}:{level}"),
+/// so a retried game action can never re-notify. Enqueue treats a unique
+/// violation as an idempotent no-op; fan-outs use skipDuplicates.
+///
+/// SQLite↔PG: no enums, JSON channels/payload, plain unique index — valid
+/// on both drivers. Terminal states: SENT | FAILED | SKIPPED.
+model NotificationQueue {
+  id             String    @id @default(cuid())
+  playerId       String
+  type           String // NOTIFICATION_TYPES catalog key (app-layer enforced)
+  dedupeKey      String // event identity — see model comment
+  channels       Json // ["IN_APP"] | ["IN_APP","TELEGRAM"] — resolved from the catalog at enqueue
+  payload        Json // template variables — validated against the per-type schema at enqueue
+  status         String    @default("PENDING") // PENDING|PROCESSING|SENT|FAILED|SKIPPED
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  availableAt    DateTime  @default(now()) // backoff-aware next eligible claim
+  claimedAt      DateTime?
+  claimedBy      String? // worker instance id (diagnostics)
+  lastError      String?
+  notificationId String? // inbox row created by IN_APP delivery (idempotent recovery)
+  createdAt      DateTime  @default(now())
+  processedAt    DateTime?
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, type, dedupeKey])
+  @@index([status, availableAt])
+  @@index([playerId, createdAt])
+  @@map("notification_queue")
+}
+
+// ────────────────────────────────────────── ADMIN, DIPLOMACY, MISC ──────────
+
+/// Explicit admin registry (seeded from ADMIN_TELEGRAM_IDS allowlist).
+/// The User row stays the identity; this row is the authorization.
+model AdminUser {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  role         String    @default("ADMIN") // ADMIN | SUPERADMIN
+  permissions  Json? // optional fine-grained overrides
+  isActive     Boolean   @default(true)
+  lastActionAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admin_users")
+}
+
+/// Every admin mutation lands here with before/after snapshots. Append-only.
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String
+  action      String // BAN|UNBAN|ADJUST_RESOURCES|ANNOUNCE|EVENT_SPAWN|…
+  targetType  String // player|clan|order|battle|…
+  targetId    String?
+  before      Json?
+  after       Json?
+  reason      String?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  actor User @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+/// Post-MVP: player/clan relations. Schema-ready from day one.
+model DiplomacyRelation {
+  id        String   @id @default(cuid())
+  kind      String // PLAYER_CLAN|CLAN_CLAN
+  sourceId  String // playerId or clanId per kind
+  targetId  String
+  relation  String // ALLIANCE|PEACE|WAR|TRADE_AGREEMENT|EMBARGO
+  status    String   @default("ACTIVE") // ACTIVE|PROPOSED|REVOKED|EXPIRED
+  since     DateTime @default(now())
+  expiresAt DateTime?
+
+  @@unique([kind, sourceId, targetId])
+  @@map("diplomacy_relations")
+}
+
+/// Post-MVP: spy system. Schema-ready from day one.
+model SpyMission {
+  id             String   @id @default(cuid())
+  playerId       String
+  targetPlayerId String
+  missionType    String // ARMY_INTEL|RESOURCE_INTEL|DEFENSE_INTEL|TECH_INTEL
+  successChance  Int // basis points
+  success        Boolean?
+  startedAt      DateTime @default(now())
+  completesAt    DateTime
+  status         String   @default("RUNNING") // RUNNING|COMPLETED|FAILED|COUNTERED
+  result         Json?
+
+  player       Player @relation("SpyOwner", fields: [playerId], references: [id], onDelete: Cascade)
+  targetPlayer Player @relation("SpyTarget", fields: [targetPlayerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, status])
+  @@map("spy_missions")
+}
+
+/// Anti double-submit for sensitive operations (24h TTL enforced in service).
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  playerId    String?
+  action      String
+  requestHash String
+  responseBody Json?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}

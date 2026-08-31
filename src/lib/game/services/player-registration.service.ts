@@ -189,6 +189,9 @@ export async function ensurePlayer(tx: Tx, input: EnsurePlayerInput): Promise<En
  */
 export async function runRegistrationTransaction<T>(run: (tx: Tx) => Promise<T>): Promise<T> {
   return withRegistrationLock(() =>
-    withWriteRetry(() => dbWrite.$transaction(run, REGISTRATION_TX_OPTIONS), isUniqueConstraintError),
+    withWriteRetry(
+      () => dbWrite.$transaction(run, REGISTRATION_TX_OPTIONS),
+      isUniqueConstraintError,
+    ),
   )
 }

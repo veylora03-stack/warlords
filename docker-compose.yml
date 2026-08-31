@@ -1,0 +1,47 @@
+# WARLORDS — local production-parity stack (Phase 26).
+# Boots the containerized app against a real PostgreSQL — the SAME shape as
+# the production deployment (Supabase/Postgres + standalone server), purely
+# for local verification. NOT a production topology.
+#
+#   docker compose up --build
+#   → app on http://localhost:3000  (/health, /ready, /api/health)
+#
+# Placeholders below are dev-only. Real deployments get secrets from the
+# platform's secret store — never from a committed file.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: warlords
+      POSTGRES_PASSWORD: warlords-local
+      POSTGRES_DB: warlords
+    ports:
+      - '5432:5432'
+    volumes:
+      - warlords-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U warlords -d warlords']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://warlords:warlords-local@db:5432/warlords?connection_limit=40&pool_timeout=10
+      JWT_SECRET: local-only-jwt-secret-0123456789abcdef0123456789abcdef
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-local-only-webhook-secret}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      RUN_MIGRATIONS: 'true'
+      LOG_LEVEL: info
+    ports:
+      - '3000:3000'
+
+volumes:
+  warlords-pgdata:

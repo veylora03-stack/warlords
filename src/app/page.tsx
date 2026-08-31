@@ -123,51 +123,66 @@ const PHASES: PhaseRow[] = [
     name: 'Performance & Scalability (write-engine isolation · WAL · state 17→7 queries · memoized catalogs)',
     state: 'done',
   },
+  {
+    id: '26',
+    name: 'Production Deployment (Docker · health probes · Telegram webhook + commands · PG baseline migrations · deploy guide)',
+    state: 'done',
+  },
   { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
   { id: '—', name: 'Territory, Quests & World', state: 'planned' },
-  { id: '—', name: 'Telegram Bot', state: 'planned' },
+  {
+    id: '—',
+    name: 'Telegram Bot full surface (referrals · quests · clan · settings)',
+    state: 'planned',
+  },
   { id: '—', name: 'Mini App UI (full client)', state: 'planned' },
-  { id: '—', name: 'Deployment & Hardening Ops', state: 'planned' },
+  {
+    id: '—',
+    name: 'Ops Hardening (alerting · multi-region · backup automation)',
+    state: 'planned',
+  },
 ]
 
 const DELIVERABLES = [
   {
     label:
-      'Write-engine isolation — interactive transactions run on a dedicated Prisma engine, immune to read-flood queueing',
-    file: 'lib/db.ts dbWrite · economy.service runEconomyTransaction',
+      'Health probes — liveness /health (dependency-free) + readiness /ready (timeboxed DB round-trip · prod config gate) + /api/health app report',
+    file: 'src/app/health · src/app/ready · lib/health',
   },
   {
     label:
-      'Transaction-free read paths — season view/ranking resolve via guarded atomic transitions (no BEGIN IMMEDIATE on reads)',
-    file: 'services/season.service.ts resolveSeasonState',
+      'PostgreSQL production migrations — committed PG schema + additive baseline (54 tables · 82 indexes) + migrate-deploy scripts',
+    file: 'prisma/postgres/ · bun run db:pg:deploy',
   },
   {
     label:
-      'State bootstrap consolidation — /player/state 17 → 7 queries (one parallel read round for player/wallet/army/buildings/tech)',
-    file: 'services/player-state.service.ts getPlayerState',
-  },
-  {
-    label: 'Memoized catalog views — army + building config projections computed once per process (pure, zero staleness)',
-    file: 'services/army.service.ts · city.service.ts catalog views',
-  },
-  {
-    label: 'WAL journal mode (persistent) + V6 db-verify invariant — readers never block the single SQLite writer',
-    file: 'scripts/db-verify.ts V6-wal',
+      'Telegram webhook pipeline — constant-time secret gate · bounded read · command router (start/help/play/profile/rank) · Telegram-native status contract',
+    file: 'api/v1/telegram/webhook · lib/telegram/bot.ts',
   },
   {
     label:
-      'Connection pool tuning — connection_limit=40 · pool_timeout=10 for the WAL read fan (measured, not guessed)',
-    file: '.env DATABASE_URL',
+      'Bot production setup — one command configures webhook + Mini App menu button + real commands; --status / --delete rollback',
+    file: 'scripts/telegram/setup-bot.ts',
   },
   {
     label:
-      'Benchmark harness — 200-virtual-player load test (weighted op mix · think time · p50–p99 · RSS/CPU sampling)',
-    file: 'scripts/bench/loadtest.ts',
+      'Container — multi-stage Dockerfile (standalone output · non-root · HEALTHCHECK) + optional migrate entrypoint + PG parity compose',
+    file: 'Dockerfile · docker/docker-entrypoint.sh · docker-compose.yml',
   },
   {
     label:
-      'Measured capacity — 100 players zero-error at 37 RPS (reads p99 ≤ 4 s); 8-way write collapse 95.4 s → 0.78 s (122×)',
-    file: 'docs/PHASE25-PERFORMANCE-REPORT.md',
+      'Production-safe logging — per-query logs auto-disabled in prod, structured JSON + secret redaction everywhere else',
+    file: 'lib/db.ts · lib/logger',
+  },
+  {
+    label:
+      'Environment contract — full .env.example with REQUIRED-IN-PROD markers; secrets stay in platform stores, verified absent from Git',
+    file: '.env.example · DEPLOYMENT.md',
+  },
+  {
+    label:
+      'Deployment guide — platform walk-throughs (Render/Railway/Koyeb/Vercel + Supabase), migrations, bot setup, rollback, checklist',
+    file: 'DEPLOYMENT.md',
   },
 ]
 
@@ -592,7 +607,7 @@ export default function WarlordsConsole() {
               <div className="flex items-center gap-2">
                 <NotificationBell enabled={signedIn} />
                 <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                  PHASE 25 COMPLETE
+                  PHASE 26 COMPLETE
                 </Badge>
               </div>
               <span className="font-mono text-xs text-zinc-500">
@@ -1642,7 +1657,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 25 — Performance & Scalability Deliverables
+              Phase 26 — Production Deployment Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -1659,12 +1674,12 @@ export default function WarlordsConsole() {
             ))}
             <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="min-w-0 text-xs text-zinc-300 [overflow-wrap:anywhere]">
-                Quality gate — lint · typecheck · format · 235 unit + 185 integration tests ·
-                3-layer repo audit (routes · services · infra) · dependency audit ·
-                secrets scan · security report with honest limitations register
+                Quality gate — lint · typecheck · format · full test suites green · production build
+                (standalone) · smoke test · health checks (/health · /ready · /api/health) · secrets
+                scan · PG migration set validated
               </span>
               <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-400 [overflow-wrap:anywhere]">
-                auth ✓ rbac ✓ economy ✓ races ✓ headers ✓ limits ✓ report ✓
+                build ✓ health ✓ ready ✓ webhook ✓ docker ✓ migrations ✓ env ✓ guide ✓
               </code>
             </div>
           </CardContent>
@@ -1674,7 +1689,7 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>WARLORDS Dev Console · Phase 25 · awaiting approval for Phase 26</span>
+          <span>WARLORDS Dev Console · Phase 26 · awaiting approval for Phase 27</span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

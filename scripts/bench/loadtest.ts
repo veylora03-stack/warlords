@@ -163,7 +163,7 @@ class SysSampler {
       let cpuPercent = 0
       if (this.lastJiffies !== null) {
         const elapsedSec = (now - this.lastAt) / 1000
-        cpuPercent = (jiffies - this.lastJiffies) / 100 / elapsedSec * 100
+        cpuPercent = ((jiffies - this.lastJiffies) / 100 / elapsedSec) * 100
       }
       this.lastJiffies = jiffies
       this.lastAt = now
@@ -213,7 +213,14 @@ async function call(
   token: string | null,
   body?: unknown,
   ip = '203.0.127.1',
-): Promise<{ status: number; ok: boolean; code?: string; token?: string; itemId?: string; ms: number }> {
+): Promise<{
+  status: number
+  ok: boolean
+  code?: string
+  token?: string
+  itemId?: string
+  ms: number
+}> {
   const t0 = performance.now()
   try {
     const res = await fetch(`${BASE}${path}`, {
@@ -276,9 +283,15 @@ async function registerPlayers(count: number): Promise<BenchPlayer[]> {
       if (slot > count) return
       const telegramId = `${TG_PREFIX}${String(slot).padStart(4, '0')}`
       const ip = `203.0.127.${(slot % 254) + 1}`
-      const res = await call('POST', '/api/v1/auth/telegram', null, {
-        initData: buildInitData(telegramId),
-      }, ip)
+      const res = await call(
+        'POST',
+        '/api/v1/auth/telegram',
+        null,
+        {
+          initData: buildInitData(telegramId),
+        },
+        ip,
+      )
       if (res.status === 429) {
         // IP-keyed pre-auth throttle — back off and retry the identity.
         await new Promise((r) => setTimeout(r, 2000))
@@ -342,10 +355,16 @@ const OPS: Record<string, Op> = {
   // (50% in-progress refund — bench wallets are topped up, net cost small).
   // Latency = full train+cancel cycle.
   train_cancel: async (p) => {
-    const start = await call('POST', '/api/v1/army/train', p.token, {
-      unitId: 'swordsman',
-      count: 1,
-    }, p.ip)
+    const start = await call(
+      'POST',
+      '/api/v1/army/train',
+      p.token,
+      {
+        unitId: 'swordsman',
+        count: 1,
+      },
+      p.ip,
+    )
     if (!start.ok || !start.itemId) {
       return { status: start.status, ok: false, code: start.code ?? 'NO_ITEM_ID', ms: start.ms }
     }
@@ -375,8 +394,7 @@ async function warmup(players: BenchPlayer[]): Promise<void> {
   // warmup-players bounds the CONCURRENT warmup fan-out — on badly
   // contending builds the full fan-out can itself collapse the DB, hiding
   // the measured window behind warmup. 0 = all players (default).
-  const slice =
-    WARMUP_PLAYERS > 0 ? players.slice(0, WARMUP_PLAYERS) : players
+  const slice = WARMUP_PLAYERS > 0 ? players.slice(0, WARMUP_PLAYERS) : players
   for (let round = 0; round < 2; round++) {
     await Promise.all(
       slice.map(async (p) => {

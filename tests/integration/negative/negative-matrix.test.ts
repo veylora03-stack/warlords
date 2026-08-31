@@ -84,11 +84,7 @@ function request(
   headersExtra?: Record<string, string>,
 ): Request {
   const rawBody =
-    body === undefined
-      ? undefined
-      : typeof body === 'string'
-        ? body
-        : JSON.stringify(body)
+    body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
   return new Request(`http://localhost:3000${path}`, {
     method,
     headers: {
@@ -155,11 +151,7 @@ function routeCtxType(type: string): { params: Promise<Record<string, string>> }
   return { params: Promise.resolve({ type }) }
 }
 
-async function expectTypedError(
-  res: Response,
-  status: number,
-  code?: string,
-): Promise<void> {
+async function expectTypedError(res: Response, status: number, code?: string): Promise<void> {
   expect(res.status).toBe(status)
   const body = (await res.json()) as ApiEnvelope<unknown>
   expect(body.ok).toBe(false)
@@ -192,7 +184,9 @@ describe('unauthorized access — no credential reaches ANY route family', () =>
 
   it('POST train / claim / mark-read without a session → 401, zero writes', async () => {
     await expectTypedError(
-      await trainPost(request('/api/v1/army/train', null, 'POST', { unitId: 'swordsman', count: 1 })),
+      await trainPost(
+        request('/api/v1/army/train', null, 'POST', { unitId: 'swordsman', count: 1 }),
+      ),
       401,
       'UNAUTHORIZED',
     )
@@ -280,9 +274,15 @@ describe('invalid ids — typed refusals, zero writes', () => {
     const queueBefore = await db.trainingQueueItem.count({ where: { playerId } })
     const walletsBefore = await getWalletBalances(db, playerId)
 
-    await expectTypedError(await trainPost(request('/api/v1/army/train', playerToken, 'POST', { unitId: '', count: 1 })), 400, 'VALIDATION_ERROR')
     await expectTypedError(
-      await trainPost(request('/api/v1/army/train', playerToken, 'POST', { unitId: 'x'.repeat(65), count: 1 })),
+      await trainPost(request('/api/v1/army/train', playerToken, 'POST', { unitId: '', count: 1 })),
+      400,
+      'VALIDATION_ERROR',
+    )
+    await expectTypedError(
+      await trainPost(
+        request('/api/v1/army/train', playerToken, 'POST', { unitId: 'x'.repeat(65), count: 1 }),
+      ),
       400,
       'VALIDATION_ERROR',
     )
@@ -462,9 +462,15 @@ describe('malformed payloads — never a 500', () => {
 
   it('a foreign Origin on a POST → 403 FORBIDDEN_ORIGIN (CSRF rail)', async () => {
     const res = await trainPost(
-      request('/api/v1/army/train', playerToken, 'POST', { unitId: 'swordsman', count: 1 }, {
-        origin: 'https://evil.example.com',
-      }),
+      request(
+        '/api/v1/army/train',
+        playerToken,
+        'POST',
+        { unitId: 'swordsman', count: 1 },
+        {
+          origin: 'https://evil.example.com',
+        },
+      ),
     )
     expect(res.status).toBe(403)
     const body = (await res.json()) as ApiEnvelope<unknown>

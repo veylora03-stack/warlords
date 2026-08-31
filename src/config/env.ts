@@ -56,6 +56,19 @@ const envSchema = z.object({
 
   /** Server-side session lifetime for issued JWT sessions. */
   SESSION_TTL_SECONDS: z.coerce.number().int().min(600).max(2_592_000).default(604_800),
+
+  /**
+   * HTTP port for the standalone production server (`next start` / Docker).
+   * The dev server pins 3000 via the `dev` script; this documents + validates
+   * the production knob that platform containers set for us.
+   */
+  PORT: z.coerce.number().int().min(1).max(65_535).default(3_000),
+
+  /**
+   * Bind address for the standalone production server. Containers MUST bind
+   * 0.0.0.0 (the platform router cannot reach a loopback-only server).
+   */
+  HOSTNAME: z.string().min(1).default('0.0.0.0'),
 })
 
 export type RawEnv = z.infer<typeof envSchema>

@@ -13,6 +13,11 @@ export const GET = defineRoute({}, async ({ request }) => {
     version: APP_VERSION,
     endpoints: {
       health: '/api/health',
+      'health:liveness': 'GET /health (deployment liveness probe — dependency-free)',
+      'health:readiness':
+        'GET /ready (deployment readiness probe — timeboxed DB round-trip + prod config gate, 503 when not ready)',
+      'telegram:webhook':
+        'POST /api/v1/telegram/webhook (Telegram Bot updates — secret-token gated; configured by scripts/telegram/setup-bot.ts)',
       'auth:telegram-login': 'POST /api/v1/auth/telegram',
       'auth:me': 'GET /api/v1/auth/me',
       'auth:logout': 'POST /api/v1/auth/logout',

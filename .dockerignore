@@ -1,0 +1,46 @@
+# WARLORDS — docker build context (Phase 26)
+# Keep the image dependency-free of dev artifacts, secrets and local data.
+
+# deps / build output
+node_modules
+.next
+out
+build
+coverage
+
+# secrets & local env — NEVER enter the image
+.env
+.env.*
+!.env.example
+
+# local databases (SQLite sandbox artifacts)
+db
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# vcs / platform
+.git
+.gitattributes
+.github
+.z-ai-config
+.claude
+.zscripts
+
+# docs, tests, samples — not needed at runtime
+docs
+tests
+examples
+skills
+mini-services
+download
+upload
+tool-results
+prompt
+
+# logs & scratch
+*.log
+dev.log
+server.log
+bench

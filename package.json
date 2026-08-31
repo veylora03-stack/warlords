@@ -18,7 +18,13 @@
     "db:seed": "bun prisma/seed.ts",
     "db:verify": "bun scripts/db-verify.ts",
     "db:generate": "prisma generate",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "db:pg:validate": "prisma validate --schema prisma/postgres/schema.prisma",
+    "db:pg:deploy": "prisma migrate deploy --schema prisma/postgres/schema.prisma",
+    "db:pg:baseline": "prisma migrate diff --from-empty --to-schema-datamodel prisma/postgres/schema.prisma --script",
+    "telegram:setup": "bun scripts/telegram/setup-bot.ts",
+    "telegram:status": "bun scripts/telegram/setup-bot.ts --status",
+    "telegram:teardown": "bun scripts/telegram/setup-bot.ts --delete"
   },
   "prisma": {
     "seed": "bun prisma/seed.ts"

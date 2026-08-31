@@ -137,129 +137,141 @@ describe('E2E: registration → city → upgrade → train → rank → notifica
   it('STEP 3 — city: the starter city has the full building roster at level 1', async () => {
     const res = await cityGet(request('/api/v1/city', token))
     expect(res.status).toBe(200)
-    const body = (await res.json()) as ApiEnvelope<{ buildings: Array<{ type: string; level: number }> }>
+    const body = (await res.json()) as ApiEnvelope<{
+      buildings: Array<{ type: string; level: number }>
+    }>
     expect(body.ok).toBe(true)
     if (!body.ok) return
     expect(body.data.buildings.length).toBeGreaterThanOrEqual(10)
     expect(body.data.buildings.every((b) => b.level === 1)).toBe(true)
   })
 
-  it('STEP 4 — building upgrade: start FARM → 2, wait out the REAL timer, claim', async () => {
-    const start = await upgradePost(
-      request('/api/v1/city/buildings/FARM/upgrade', token, 'POST'),
-      routeCtx({ type: 'FARM' }),
-    )
-    expect(start.status).toBe(200)
-    const startBody = (await start.json()) as ApiEnvelope<{
-      building: { type: string; level: number }
-      construction: { completesAt: string } | null
-    }>
-    expect(startBody.ok).toBe(true)
-    if (!startBody.ok) return
-    expect(startBody.data.construction).not.toBeNull()
+  it(
+    'STEP 4 — building upgrade: start FARM → 2, wait out the REAL timer, claim',
+    async () => {
+      const start = await upgradePost(
+        request('/api/v1/city/buildings/FARM/upgrade', token, 'POST'),
+        routeCtx({ type: 'FARM' }),
+      )
+      expect(start.status).toBe(200)
+      const startBody = (await start.json()) as ApiEnvelope<{
+        building: { type: string; level: number }
+        construction: { completesAt: string } | null
+      }>
+      expect(startBody.ok).toBe(true)
+      if (!startBody.ok) return
+      expect(startBody.data.construction).not.toBeNull()
 
-    // Wallet debited the exact server-side cost (GOLD 120 + WOOD 100).
-    const wallet = await db.resourceWallet.findUniqueOrThrow({ where: { playerId } })
-    expect(wallet.gold).toBe(BigInt(STARTER_WALLET.GOLD - 120))
-    expect(wallet.wood).toBe(BigInt(STARTER_WALLET.WOOD - 100))
+      // Wallet debited the exact server-side cost (GOLD 120 + WOOD 100).
+      const wallet = await db.resourceWallet.findUniqueOrThrow({ where: { playerId } })
+      expect(wallet.gold).toBe(BigInt(STARTER_WALLET.GOLD - 120))
+      expect(wallet.wood).toBe(BigInt(STARTER_WALLET.WOOD - 100))
 
-    // The server clock is the only authority: an early claim is refused.
-    const early = await finishPost(
-      request('/api/v1/city/buildings/FARM/finish', token, 'POST'),
-      routeCtx({ type: 'FARM' }),
-    )
-    expect(early.status).toBe(409)
+      // The server clock is the only authority: an early claim is refused.
+      const early = await finishPost(
+        request('/api/v1/city/buildings/FARM/finish', token, 'POST'),
+        routeCtx({ type: 'FARM' }),
+      )
+      expect(early.status).toBe(409)
 
-    // Wait out the REAL construction (FARM L2: 12s) with margin.
-    await sleep(14_000)
+      // Wait out the REAL construction (FARM L2: 12s) with margin.
+      await sleep(14_000)
 
-    const finish = await finishPost(
-      request('/api/v1/city/buildings/FARM/finish', token, 'POST'),
-      routeCtx({ type: 'FARM' }),
-    )
-    expect(finish.status).toBe(200)
-    const finishBody = (await finish.json()) as ApiEnvelope<{
-      building: { level: number }
-      seasonPoints: number
-    }>
-    expect(finishBody.ok).toBe(true)
-    if (!finishBody.ok) return
-    expect(finishBody.data.building.level).toBe(2)
-    expect(finishBody.data.seasonPoints).toBe(20) // 10 points × new level (2)
-  }, TIMER_STEP_TIMEOUT)
+      const finish = await finishPost(
+        request('/api/v1/city/buildings/FARM/finish', token, 'POST'),
+        routeCtx({ type: 'FARM' }),
+      )
+      expect(finish.status).toBe(200)
+      const finishBody = (await finish.json()) as ApiEnvelope<{
+        building: { level: number }
+        seasonPoints: number
+      }>
+      expect(finishBody.ok).toBe(true)
+      if (!finishBody.ok) return
+      expect(finishBody.data.building.level).toBe(2)
+      expect(finishBody.data.seasonPoints).toBe(20) // 10 points × new level (2)
+    },
+    TIMER_STEP_TIMEOUT,
+  )
 
-  it('STEP 5 — army: catalog exposes the roster; train 2 swordsmen and claim the batch', async () => {
-    const catalog = await catalogGet(request('/api/v1/army/catalog', token))
-    expect(catalog.status).toBe(200)
-    const catalogBody = (await catalog.json()) as ApiEnvelope<{
-      units: Array<{ id: string; trainingCost: Record<string, number> }>
-    }>
-    expect(catalogBody.ok).toBe(true)
-    if (!catalogBody.ok) return
-    const swordsman = catalogBody.data.units.find((u) => u.id === 'swordsman')
-    expect(swordsman).toBeDefined()
+  it(
+    'STEP 5 — army: catalog exposes the roster; train 2 swordsmen and claim the batch',
+    async () => {
+      const catalog = await catalogGet(request('/api/v1/army/catalog', token))
+      expect(catalog.status).toBe(200)
+      const catalogBody = (await catalog.json()) as ApiEnvelope<{
+        units: Array<{ id: string; trainingCost: Record<string, number> }>
+      }>
+      expect(catalogBody.ok).toBe(true)
+      if (!catalogBody.ok) return
+      const swordsman = catalogBody.data.units.find((u) => u.id === 'swordsman')
+      expect(swordsman).toBeDefined()
 
-    const train = await trainPost(
-      new Request('http://localhost:3000/api/v1/army/train', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${token}`,
-          'x-forwarded-for': IP,
-        },
-        body: JSON.stringify({ unitId: 'swordsman', count: 2 }),
-      }),
-    )
-    expect(train.status).toBe(200)
-    const trainBody = (await train.json()) as ApiEnvelope<{
-      queue: Array<{ id: string; completesAt: string; count: number }>
-    }>
-    expect(trainBody.ok).toBe(true)
-    if (!trainBody.ok) return
-    expect(trainBody.data.queue).toHaveLength(1)
-    const itemId = trainBody.data.queue[0]!.id
-    expect(trainBody.data.queue[0]!.count).toBe(2)
+      const train = await trainPost(
+        new Request('http://localhost:3000/api/v1/army/train', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${token}`,
+            'x-forwarded-for': IP,
+          },
+          body: JSON.stringify({ unitId: 'swordsman', count: 2 }),
+        }),
+      )
+      expect(train.status).toBe(200)
+      const trainBody = (await train.json()) as ApiEnvelope<{
+        queue: Array<{ id: string; completesAt: string; count: number }>
+      }>
+      expect(trainBody.ok).toBe(true)
+      if (!trainBody.ok) return
+      expect(trainBody.data.queue).toHaveLength(1)
+      const itemId = trainBody.data.queue[0]!.id
+      expect(trainBody.data.queue[0]!.count).toBe(2)
 
-    // Train cost debited: 2 × (120 GOLD + 60 FOOD + 50 IRON).
-    const wallet = await db.resourceWallet.findUniqueOrThrow({ where: { playerId } })
-    expect(wallet.gold).toBe(BigInt(STARTER_WALLET.GOLD - 120 - 240))
-    expect(wallet.food).toBe(BigInt(STARTER_WALLET.FOOD - 120))
-    expect(wallet.iron).toBe(BigInt(STARTER_WALLET.IRON - 100))
+      // Train cost debited: 2 × (120 GOLD + 60 FOOD + 50 IRON).
+      const wallet = await db.resourceWallet.findUniqueOrThrow({ where: { playerId } })
+      expect(wallet.gold).toBe(BigInt(STARTER_WALLET.GOLD - 120 - 240))
+      expect(wallet.food).toBe(BigInt(STARTER_WALLET.FOOD - 120))
+      expect(wallet.iron).toBe(BigInt(STARTER_WALLET.IRON - 100))
 
-    // Early claim refused — the clock is server-side.
-    const early = await trainCompletePost(
-      request(`/api/v1/army/train/${itemId}/complete`, token, 'POST'),
-      routeCtx({ id: itemId }),
-    )
-    expect(early.status).toBe(409)
+      // Early claim refused — the clock is server-side.
+      const early = await trainCompletePost(
+        request(`/api/v1/army/train/${itemId}/complete`, token, 'POST'),
+        routeCtx({ id: itemId }),
+      )
+      expect(early.status).toBe(409)
 
-    // Swordsman batch: 22s PER UNIT × 2 = 44s — wait with margin.
-    await sleep(48_000)
+      // Swordsman batch: 22s PER UNIT × 2 = 44s — wait with margin.
+      await sleep(48_000)
 
-    const complete = await trainCompletePost(
-      request(`/api/v1/army/train/${itemId}/complete`, token, 'POST'),
-      routeCtx({ id: itemId }),
-    )
-    expect(complete.status).toBe(200)
-    const completeBody = (await complete.json()) as ApiEnvelope<{
-      completed: { unitId: string; count: number }
-      seasonPoints: number
-    }>
-    expect(completeBody.ok).toBe(true)
-    if (!completeBody.ok) return
-    expect(completeBody.data.completed).toMatchObject({ unitId: 'swordsman', count: 2 })
-    expect(completeBody.data.seasonPoints).toBe(4) // 2 units × tier-1 points
+      const complete = await trainCompletePost(
+        request(`/api/v1/army/train/${itemId}/complete`, token, 'POST'),
+        routeCtx({ id: itemId }),
+      )
+      expect(complete.status).toBe(200)
+      const completeBody = (await complete.json()) as ApiEnvelope<{
+        completed: { unitId: string; count: number }
+        seasonPoints: number
+      }>
+      expect(completeBody.ok).toBe(true)
+      if (!completeBody.ok) return
+      expect(completeBody.data.completed).toMatchObject({ unitId: 'swordsman', count: 2 })
+      expect(completeBody.data.seasonPoints).toBe(4) // 2 units × tier-1 points
 
-    const stack = await db.playerUnit.findFirst({
-      where: { playerId, unit: { id: 'swordsman' } },
-    })
-    expect(stack?.count).toBe(22) // 20 starter + 2 trained
-  }, TIMER_STEP_TIMEOUT)
+      const stack = await db.playerUnit.findFirst({
+        where: { playerId, unit: { id: 'swordsman' } },
+      })
+      expect(stack?.count).toBe(22) // 20 starter + 2 trained
+    },
+    TIMER_STEP_TIMEOUT,
+  )
 
   it('STEP 6 — season: the standing reflects the journey points and ranking exposes it', async () => {
     const res = await seasonGet(request('/api/v1/season', token))
     expect(res.status).toBe(200)
-    const body = (await res.json()) as ApiEnvelope<{ me: { seasonPoints: number; rank: number | null } }>
+    const body = (await res.json()) as ApiEnvelope<{
+      me: { seasonPoints: number; rank: number | null }
+    }>
     expect(body.ok).toBe(true)
     if (!body.ok) return
     expect(body.data.me.seasonPoints).toBe(24) // 20 (farm L2) + 4 (troops)

@@ -30,6 +30,16 @@ const globalRef = globalThis as typeof globalThis & {
 }
 
 /**
+ * Whether `startNotificationWorker` has registered the in-process drain
+ * loop in THIS process. Informational (health/readiness reporting) — the
+ * queue itself is claim-safe across instances, so a `false` here never
+ * gates routing by itself.
+ */
+export function isNotificationWorkerActive(): boolean {
+  return globalRef.__warlordsNotificationWorkerStarted === true
+}
+
+/**
  * Starts the background drain loop exactly once per process. No-op under
  * `bun test` (NODE_ENV=test) so suites drive the queue deterministically.
  */
