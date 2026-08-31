@@ -34,6 +34,18 @@ export const GET = defineRoute({}, async ({ request }) => {
       'army:train': 'POST /api/v1/army/train {unitId, count} (server-side cost + FIFO queue)',
       'army:train-complete': 'POST /api/v1/army/train/:id/complete (claim finished batch)',
       'army:train-cancel': 'POST /api/v1/army/train/:id/cancel (policy refund + queue re-walk)',
+      'season:status': 'GET /api/v1/season (season lifecycle · rules · my standing)',
+      'season:ranking':
+        'GET /api/v1/season/ranking?limit&seasonId (live server-computed ranking · settled history)',
+      'season:rewards': 'GET /api/v1/season/rewards (pending + claimed season payouts)',
+      'season:rewards-claim': 'POST /api/v1/season/rewards/claim {seasonId} (idempotent payout)',
+      'season:progression':
+        'GET /api/v1/season/progression (permanent titles · cosmetics · achievements · commanders)',
+      'season:title-equip': 'POST /api/v1/season/progression/title {titleId|null} (owned titles only)',
+      'admin:season-settle-simulate':
+        'POST /api/v1/admin/season/settle/simulate (DRY-RUN reset report — admin only)',
+      'admin:season-settle-execute':
+        'POST /api/v1/admin/season/settle/execute {seasonNumber} (transactional reset — admin only)',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

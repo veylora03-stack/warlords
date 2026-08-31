@@ -17,7 +17,18 @@
 import { authenticate } from './session.service'
 import { resolveAuthConfig, type AuthConfig } from './session.config'
 import { AppError } from '@/lib/api/errors'
+import { db } from '@/lib/db'
 import type { AuthPrincipal, RefreshedSession } from './session.types'
+
+/** DB-backed active-admin check (admin_users is the revocation surface). */
+async function findActiveAdmin(userId: string): Promise<{ role: string } | null> {
+  const admin = await db.adminUser.findUnique({
+    where: { userId },
+    select: { role: true, isActive: true },
+  })
+  if (!admin || !admin.isActive) return null
+  return { role: admin.role }
+}
 
 export interface RequireAuthOptions {
   /** Re-issue the token when the session is inside the sliding window. */
@@ -58,4 +69,26 @@ export async function requirePlayer(
     throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
   }
   return { principal: principal as RequirePlayerResult['principal'], refreshed }
+}
+
+/**
+ * Admin gate for operator-only routes (season settlement, future admin
+ * tooling). Two independent checks — BOTH must pass:
+ *   1. the authenticated user row carries role SUPERADMIN (DB-backed),
+ *   2. an ACTIVE admin_users row exists (revocable without touching auth).
+ * Never trust the client: a valid session without the admin role is 403.
+ */
+export async function requireAdmin(
+  request: Request,
+  options: RequireAuthOptions = {},
+): Promise<RequireAuthResult & { adminRole: string }> {
+  const { principal, refreshed } = await requireAuth(request, options)
+  if (principal.user.role !== 'SUPERADMIN') {
+    throw new AppError('ADMIN_REQUIRED', 'Administrator privileges required')
+  }
+  const admin = await findActiveAdmin(principal.user.id)
+  if (!admin) {
+    throw new AppError('ADMIN_REQUIRED', 'Administrator privileges required')
+  }
+  return { principal, refreshed, adminRole: admin.role }
 }

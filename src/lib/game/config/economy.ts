@@ -81,6 +81,7 @@ export const LEDGER_REASONS = [
   'MARKET_PURCHASE', // player-market buys (debit buyer)
   'MARKET_SALE', // player-market sales (credit seller)
   'ADMIN_ADJUSTMENT', // audited support/ops corrections (either sign)
+  'SEASON_REWARD', // seasonal ranking payout at claim (credit)
 ] as const
 export type LedgerReason = (typeof LEDGER_REASONS)[number]
 

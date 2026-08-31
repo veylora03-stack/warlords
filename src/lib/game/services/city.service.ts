@@ -55,6 +55,8 @@ import {
   spendResources,
 } from '@/lib/game/services/economy.service'
 import { recalculatePlayerPower } from '@/lib/game/services/power.service'
+import { awardSeasonPointsInTx } from '@/lib/game/services/season.service'
+import { seasonPointsForBuildingLevelUp } from '@/lib/game/config/seasons'
 import type { Tx } from '@/lib/game/services/player-bootstrap.service'
 
 const log = logger.child({ module: 'game/city' })
@@ -324,6 +326,8 @@ export interface BuildingFinishResult {
   /** Freshly recomputed total power (the level-up effect is live). */
   power: number
   newLevel: number
+  /** Seasonal points awarded by THIS claim (0 outside an ACTIVE season). */
+  seasonPoints: number
 }
 
 /**
@@ -378,6 +382,15 @@ export async function finishBuildingUpgradeInTx(
   // real state just mutated (never hand-set).
   const power = await recalculatePlayerPower(tx, playerId)
 
+  // Seasonal score: server-computed from the real action inside the same tx.
+  const seasonPoints = await awardSeasonPointsInTx(
+    tx,
+    playerId,
+    seasonPointsForBuildingLevelUp(newLevel),
+    'BUILDING_LEVEL_UP',
+    { buildingType: type, newLevel },
+  )
+
   await tx.notification.create({
     data: {
       playerId,
@@ -392,6 +405,7 @@ export async function finishBuildingUpgradeInTx(
     buildingType: type,
     newLevel,
     power,
+    seasonPoints,
   })
 
   const updated = await loadBuildingRow(tx, city.id, type)
@@ -399,6 +413,7 @@ export async function finishBuildingUpgradeInTx(
     building: toBuildingView(updated, now),
     power,
     newLevel,
+    seasonPoints,
   }
 }
 

@@ -38,6 +38,16 @@ import {
   type CatalogUnitView,
   type TrainingQueueItemView,
 } from '@/features/army'
+import {
+  useClaimSeasonRewardMutation,
+  useEquipTitleMutation,
+  useSeasonProgressionQuery,
+  useSeasonQuery,
+  useSeasonRankingQuery,
+  useSeasonRewardsQuery,
+  type RankedRow,
+  type SeasonRewardPayout,
+} from '@/features/season'
 import { useUiStore } from '@/stores/ui.store'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -81,8 +91,13 @@ const PHASES: PhaseRow[] = [
     name: 'Army & Unit System (11 units · data-driven counters · recruitment queue)',
     state: 'done',
   },
+  {
+    id: '20',
+    name: 'Seasonal System (season lifecycle · ranking · transactional reset · permanent progression)',
+    state: 'done',
+  },
   { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
-  { id: '—', name: 'Quests, Ranking & World', state: 'planned' },
+  { id: '—', name: 'Territory, Quests & World', state: 'planned' },
   { id: '—', name: 'Telegram Bot', state: 'planned' },
   { id: '—', name: 'Mini App UI (full client)', state: 'planned' },
   { id: '—', name: 'Admin Panel', state: 'planned' },
@@ -91,41 +106,40 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'Unit roster — 11 units · 4 classes · attack/defense/health/speed/upkeep/cost/time',
-    file: 'src/lib/game/config/units.ts',
+    label: 'Season lifecycle — UPCOMING→ACTIVE→FINISHED resolved against the server clock',
+    file: 'src/lib/game/services/season.service.ts',
   },
   {
-    label: 'Data-driven counters — Infantry ▸ Cavalry ▸ Ranged ▸ Infantry (+ siege fear)',
-    file: 'strongAgainst / weakAgainst (bps)',
+    label: 'Seasonal score — server-computed from REAL upgrades + training completions',
+    file: 'config/seasons.ts SEASON_RULES.score',
   },
   {
-    label: 'Army service — transactional recruitment, double-spend-proof debits',
-    file: 'src/lib/game/services/army.service.ts',
+    label: 'Live ranking — deterministic (points desc, id asc) · history materialized at settle',
+    file: 'Leaderboard (SEASON · SEASONAL)',
   },
   {
-    label: 'Ledger-driven costs — every debit carries UNIT_TRAINING + queue ref',
-    file: 'spendResources (reason: UNIT_TRAINING)',
+    label: 'Transactional reset — at-most-once settledAt claim · all-or-nothing in ONE tx',
+    file: 'src/lib/game/services/season-settlement.service.ts',
   },
   {
-    label: 'FIFO recruitment queue — depth 5 · batch cap 1000 · locked paid windows',
-    file: 'ARMY_TRAINING (config/army.ts)',
+    label: 'Reset SIMULATION — dry-run rolls back, zero persistence, full report first',
+    file: 'POST /admin/season/settle/simulate',
   },
   {
-    label: 'Lifecycle — claim against server clock · policy refund · queue re-walk',
-    file: 'TRAINING → COMPLETABLE → DONE / CANCELLED',
+    label: 'Permanent progression — achievements · cosmetics · titles · permanent commanders',
+    file: 'PERMANENT_PROGRESSION_CATALOG',
   },
   {
-    label: 'Building gates — Barracks/Archer Camp/Stable/Armory level + real speed bps',
-    file: 'trainingBuilding + requiredBuildingLevel',
+    label: 'Seasonal wipe — season points · territory ownership · season wallets · seasonal commanders',
+    file: 'SEASONAL_RESET_CATALOG',
   },
   {
-    label: 'APIs — GET /army · GET /army/catalog · POST train · POST complete · POST cancel',
-    file: 'src/app/api/v1/army/**',
+    label: 'Idempotent reward claim — conditional claimedAt + ledger idempotency key',
+    file: 'POST /api/v1/season/rewards/claim',
   },
   {
-    label:
-      'All scenarios tested — recruit · insufficient · queue · completion · concurrent · invalid unit · negative quantity · unauthorized',
-    file: 'tests/integration/army/',
+    label: 'Admin-gated settlement — SUPERADMIN role + active admin_users row · audited',
+    file: 'requireAdmin + AuditLog SEASON_SETTLE',
   },
 ]
 
@@ -471,11 +485,18 @@ export default function WarlordsConsole() {
   const { data: army } = useArmyQuery({ enabled: signedIn })
   const { data: armyCatalog } = useArmyCatalogQuery({ enabled: signedIn })
 
+  const { data: season } = useSeasonQuery({ enabled: signedIn })
+  const { data: seasonRanking } = useSeasonRankingQuery({ enabled: signedIn, limit: 10 })
+  const { data: seasonRewards } = useSeasonRewardsQuery({ enabled: signedIn })
+  const { data: seasonProgression } = useSeasonProgressionQuery({ enabled: signedIn })
+
   const upgradeBuilding = useUpgradeBuildingMutation()
   const finishBuilding = useFinishBuildingMutation()
   const recruit = useRecruitMutation()
   const completeTraining = useCompleteTrainingMutation()
   const cancelTraining = useCancelTrainingMutation()
+  const claimSeasonReward = useClaimSeasonRewardMutation()
+  const equipTitle = useEquipTitleMutation()
 
   // Recruitment form state — the server owns the real quantity ceiling; the
   // input is clamped defensively to a sane positive range before submit.
@@ -501,13 +522,17 @@ export default function WarlordsConsole() {
     finishBuilding.isPending ||
     recruit.isPending ||
     completeTraining.isPending ||
-    cancelTraining.isPending
+    cancelTraining.isPending ||
+    claimSeasonReward.isPending ||
+    equipTitle.isPending
   const mutationError =
     upgradeBuilding.error ??
     finishBuilding.error ??
     recruit.error ??
     completeTraining.error ??
-    cancelTraining.error
+    cancelTraining.error ??
+    claimSeasonReward.error ??
+    equipTitle.error
   const mutationErrorDetail = (
     mutationError as (Error & { details?: { missing?: string[] } }) | null
   )?.details?.missing
@@ -537,7 +562,7 @@ export default function WarlordsConsole() {
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 7 COMPLETE
+                PHASE 20 COMPLETE
               </Badge>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
@@ -1232,6 +1257,252 @@ export default function WarlordsConsole() {
             </CardContent>
           </Card>
 
+          {/* Seasonal System — live from /api/v1/season with claim + title-equip intents */}
+          <Card className="border-zinc-800 bg-zinc-900/60 md:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base font-bold text-zinc-100">
+                Seasonal System
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    season?.season
+                      ? season.season.status === 'ACTIVE'
+                        ? 'text-emerald-400'
+                        : 'text-orange-400'
+                      : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      season?.season
+                        ? season.season.status === 'ACTIVE'
+                          ? 'bg-emerald-400'
+                          : 'animate-pulse bg-orange-400'
+                        : 'bg-zinc-600'
+                    }`}
+                  />
+                  {season?.season
+                    ? `${season.season.name.toUpperCase()} · ${season.season.status}${
+                        season.settlementPending ? ' · RESET PENDING' : ''
+                      }`
+                    : signedIn
+                      ? 'NO SEASON'
+                      : 'SIGN IN TO VIEW'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 font-mono text-xs text-zinc-400">
+              {season && seasonRanking ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        my season points
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {season.me.seasonPoints.toLocaleString('en-US')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        my rank
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {season.me.rank ? `#${season.me.rank}` : 'unranked'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        season wallet (shards)
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {season.me.shards}
+                      </span>
+                    </div>
+                    <div className="flex justify-between sm:block">
+                      <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                        {season.season?.status === 'ACTIVE' ? 'ends in' : 'status'}
+                      </span>
+                      <span className="ml-2 text-zinc-200 sm:ml-0 sm:block">
+                        {season.season?.timeLeftSec != null
+                          ? `${Math.floor(season.season.timeLeftSec / 86400)}d ${Math.floor(
+                              (season.season.timeLeftSec % 86400) / 3600,
+                            )}h`
+                          : season.settlementPending
+                            ? 'awaiting reset'
+                            : '—'}
+                      </span>
+                    </div>
+                  </div>
+                  <Separator className="bg-zinc-800" />
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {/* Live top-10 — computed server-side, deterministic tie-break */}
+                    <div>
+                      <p className="mb-1.5 text-[11px] uppercase tracking-wider text-zinc-500">
+                        live ranking · top 10
+                      </p>
+                      <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
+                        {seasonRanking.live.length > 0 ? (
+                          seasonRanking.live.map((row: RankedRow) => (
+                            <div
+                              key={row.playerId}
+                              className={`flex items-center justify-between gap-2 rounded border px-2 py-1.5 ${
+                                seasonRanking.me.rank != null && row.rank === seasonRanking.me.rank
+                                  ? 'border-amber-500/50'
+                                  : 'border-zinc-800'
+                              } bg-zinc-950/60`}
+                            >
+                              <span className="min-w-0 truncate">
+                                <span
+                                  className={`mr-2 font-bold ${
+                                    row.rank <= 3 ? 'text-amber-400' : 'text-zinc-500'
+                                  }`}
+                                >
+                                  #{row.rank}
+                                </span>
+                                <span className="text-zinc-300">{row.playerName}</span>
+                              </span>
+                              <span className="shrink-0 text-[10px] text-zinc-500">
+                                {row.score.toLocaleString('en-US')} pts
+                                {row.tier ? ` · ${row.tier}` : ''}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-zinc-500">
+                            no ranked players yet — upgrades and training earn season points
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {/* Reward tiers + pending payouts */}
+                    <div>
+                      <p className="mb-1.5 text-[11px] uppercase tracking-wider text-zinc-500">
+                        reward tiers
+                      </p>
+                      <div className="mb-2 space-y-1">
+                        {season.rules.rewardTiers.map((tier) => (
+                          <div
+                            key={tier.name}
+                            className="rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1.5"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-zinc-300">
+                                #{tier.fromRank}
+                                {tier.toRank > tier.fromRank ? `–#${tier.toRank}` : ''}
+                              </span>
+                              <span className="text-[10px] text-amber-400">{tier.name}</span>
+                            </div>
+                            <p className="mt-0.5 text-[10px] text-zinc-500">
+                              {Object.entries(tier.resources)
+                                .map(
+                                  ([res, amount]) =>
+                                    `${SHORT_CODE[res] ?? res} ${amount.toLocaleString('en-US')}`,
+                                )
+                                .join(' · ')}
+                              {tier.titles.length > 0 ? ` · ${tier.titles.length} title` : ''}
+                              {tier.cosmetics.length > 0
+                                ? ` · ${tier.cosmetics.length} cosmetic`
+                                : ''}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      {(seasonRewards?.pending.length ?? 0) > 0 ? (
+                        <div className="space-y-1">
+                          <p className="text-[11px] uppercase tracking-wider text-emerald-400">
+                            claimable rewards
+                          </p>
+                          {seasonRewards!.pending.map((payout: SeasonRewardPayout) => (
+                            <div
+                              key={payout.seasonId}
+                              className="flex items-center justify-between gap-2 rounded border border-emerald-500/30 bg-emerald-500/5 px-2 py-1.5"
+                            >
+                              <span className="min-w-0 text-[10px] text-zinc-300">
+                                S{payout.seasonNumber} #{payout.rank} {payout.tierName}
+                              </span>
+                              <Button
+                                size="sm"
+                                className="h-7 shrink-0 bg-emerald-600 px-2 text-[10px] font-bold text-zinc-950 hover:bg-emerald-500"
+                                disabled={claimSeasonReward.isPending}
+                                onClick={() => claimSeasonReward.mutate(payout.seasonId)}
+                              >
+                                CLAIM
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {season.settlementPending ? (
+                        <p className="mt-2 text-[10px] text-orange-400">
+                          Season {season.season?.number} ended — the transactional reset settles
+                          rankings and rewards (admin simulate → execute).
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  {/* Permanent progression — survives every reset */}
+                  {seasonProgression ? (
+                    <>
+                      <Separator className="bg-zinc-800" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] uppercase tracking-wider text-zinc-500">
+                          permanent progression:
+                        </span>
+                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                          {seasonProgression.achievements.length} achievements
+                        </Badge>
+                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                          {seasonProgression.cosmetics.length} cosmetics
+                        </Badge>
+                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                          {seasonProgression.titles.length} titles
+                        </Badge>
+                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                          {seasonProgression.commanders.length} commanders
+                        </Badge>
+                        {seasonProgression.titles.length > 0 ? (
+                          <select
+                            aria-label="Equip a title"
+                            value={seasonProgression.equippedTitleId ?? ''}
+                            onChange={(e) => equipTitle.mutate(e.target.value || null)}
+                            className="h-7 rounded border border-zinc-800 bg-zinc-950 px-2 text-[10px] text-zinc-300"
+                          >
+                            <option value="">— no title —</option>
+                            {seasonProgression.titles.map((title) => (
+                              <option key={title.id} value={title.id}>
+                                {title.name} ({title.rarity})
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-zinc-500">
+                        Server-driven seasons: the lifecycle answers to the server clock; points are
+                        computed inside the transactions of real actions (
+                        <span className="text-amber-400">
+                          {season.rules.score.buildingLevelUpPointsPerNewLevel} pts/level ·{' '}
+                          {season.rules.score.unitTrainedPointsPerTier.join('/')} pts/unit by tier
+                        </span>
+                        ); the reset is a single transaction that wipes
+                        <span className="text-orange-400"> season points · territory · season
+                        wallets · seasonal commanders</span> while achievements, cosmetics, titles
+                        and permanent commanders are preserved — and it is simulated (rolled-back
+                        dry-run) before it can execute.
+                      </p>
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                <p className="leading-relaxed text-zinc-500">
+                  {signedIn
+                    ? 'Signed in but no season projection available — the season scheduler resolves the lifecycle on access.'
+                    : 'Anonymous — sign in to view the live season, ranking and your progression.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -1320,7 +1591,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 7 — Army &amp; Unit System Deliverables
+              Phase 20 — Seasonal System Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -1338,11 +1609,11 @@ export default function WarlordsConsole() {
             <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="min-w-0 text-xs text-zinc-300 [overflow-wrap:anywhere]">
                 Quality gate — lint · typecheck · format · unit + integration + e2e tests ·
-                production build ·
-                recruit/insufficient/queue/completion/concurrent/invalid/negative/unauthorized green
+                reset simulation (zero-write proof) · idempotent claim (replay + concurrent) ·
+                permanent-vs-seasonal survival matrix · unauthorized matrix green
               </span>
               <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-400 [overflow-wrap:anywhere]">
-                roster ✓ counters ✓ queue ✓ ledger ✓ tests ✓
+                lifecycle ✓ ranking ✓ reset ✓ simulate ✓ claim ✓ tests ✓
               </code>
             </div>
           </CardContent>
@@ -1353,7 +1624,7 @@ export default function WarlordsConsole() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
           <span>
-            WARLORDS Dev Console · Phase 7 · awaiting approval for Phase 8 (Battle Engine)
+            WARLORDS Dev Console · Phase 20 · awaiting approval for Phase 21
           </span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>

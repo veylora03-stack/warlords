@@ -17,6 +17,7 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import { getEnv } from '@/config/env'
 import { logger } from '@/lib/logger'
 import { ACHIEVEMENTS } from '@/lib/game/config/achievements'
+import { COSMETICS, TITLES } from '@/lib/game/config/seasons'
 import { ITEMS } from '@/lib/game/config/items'
 import { QUESTS } from '@/lib/game/config/quests'
 import { TECHNOLOGIES } from '@/lib/game/config/technologies'
@@ -169,6 +170,44 @@ async function seedCatalogs() {
     })
   }
 
+  for (const t of TITLES) {
+    await prisma.title.upsert({
+      where: { id: t.id },
+      create: {
+        id: t.id,
+        name: t.name,
+        rarity: t.rarity,
+        source: t.source,
+        sortOrder: t.sortOrder,
+      },
+      update: {
+        name: t.name,
+        rarity: t.rarity,
+        source: t.source,
+        sortOrder: t.sortOrder,
+      },
+    })
+  }
+
+  for (const c of COSMETICS) {
+    await prisma.cosmetic.upsert({
+      where: { id: c.id },
+      create: {
+        id: c.id,
+        name: c.name,
+        kind: c.kind,
+        rarity: c.rarity,
+        source: c.source,
+      },
+      update: {
+        name: c.name,
+        kind: c.kind,
+        rarity: c.rarity,
+        source: c.source,
+      },
+    })
+  }
+
   for (const i of ITEMS) {
     await prisma.item.upsert({
       where: { id: i.id },
@@ -204,6 +243,8 @@ async function seedCatalogs() {
     quests: QUESTS.length,
     achievements: ACHIEVEMENTS.length,
     items: ITEMS.length,
+    titles: TITLES.length,
+    cosmetics: COSMETICS.length,
   })
 }
 

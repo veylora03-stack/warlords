@@ -58,6 +58,8 @@ import {
 } from '@/lib/game/services/economy.service'
 import { MAX_DELTA } from '@/lib/game/config/economy'
 import { recalculatePlayerPower } from '@/lib/game/services/power.service'
+import { awardSeasonPointsInTx } from '@/lib/game/services/season.service'
+import { seasonPointsForTrainedUnits } from '@/lib/game/config/seasons'
 import type { Tx } from '@/lib/game/services/player-bootstrap.service'
 
 const log = logger.child({ module: 'game/army' })
@@ -195,7 +197,7 @@ async function loadTrainingBuilding(tx: ReadClient, playerId: string, type: stri
 async function loadOwnQueueItem(tx: ReadClient, playerId: string, itemId: string) {
   const item = await tx.trainingQueueItem.findFirst({
     where: { id: itemId, playerId },
-    include: { unit: { select: { name: true, trainingCost: true } } },
+    include: { unit: { select: { name: true, trainingCost: true, tier: true } } },
   })
   if (!item) {
     // Only the owner's rows are reachable — foreign ids are indistinguishable
@@ -400,6 +402,8 @@ export interface TrainingCompleteResult {
   completed: { id: string; unitId: string; unitName: string; count: number }
   /** Freshly recomputed total power (the trained units are live). */
   power: number
+  /** Seasonal points awarded by THIS claim (0 outside an ACTIVE season). */
+  seasonPoints: number
   /** The player's total count of THE trained unit (starter + trained). */
   stackCount: number
   queue: TrainingQueueItemView[]
@@ -449,6 +453,15 @@ export async function completeTrainingInTx(
   // The trained units are live immediately: power recomputed from real state.
   const power = await recalculatePlayerPower(tx, playerId)
 
+  // Seasonal score: server-computed from the real action inside the same tx.
+  const seasonPoints = await awardSeasonPointsInTx(
+    tx,
+    playerId,
+    seasonPointsForTrainedUnits(item.unit.tier, item.count),
+    'UNIT_TRAINED',
+    { unitId: item.unitId, tier: item.unit.tier, count: item.count },
+  )
+
   await tx.notification.create({
     data: {
       playerId,
@@ -463,6 +476,7 @@ export async function completeTrainingInTx(
     unitId: item.unitId,
     count: item.count,
     power,
+    seasonPoints,
   })
 
   const queue = await queueView(tx, playerId, now)
@@ -474,6 +488,7 @@ export async function completeTrainingInTx(
       count: item.count,
     },
     power,
+    seasonPoints,
     stackCount: stack.count,
     queue,
   }

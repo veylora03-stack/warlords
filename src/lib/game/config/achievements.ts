@@ -57,4 +57,20 @@ export const ACHIEVEMENTS: AchievementCatalogEntry[] = [
     target: 50,
     reward: { GEMS: 100 },
   },
+  {
+    id: 'ach-season-champion',
+    title: 'Season Champion',
+    description: 'Finish a season ranked in the top 3.',
+    category: 'PROGRESS',
+    target: 1,
+    reward: { GEMS: 250 },
+  },
+  {
+    id: 'ach-season-veteran',
+    title: 'Season Veteran',
+    description: 'Finish a season ranked in the top 50.',
+    category: 'PROGRESS',
+    target: 1,
+    reward: { GEMS: 60 },
+  },
 ]

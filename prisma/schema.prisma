@@ -103,6 +103,7 @@ model Player {
   energy          Int       @default(100)
   energyUpdatedAt DateTime  @default(now())
   seasonPoints    Int       @default(0)
+  activeTitleId   String? // equipped cosmetic title (permanent progression)
   stats           Json? // aggregate counters (battlesWon, resourcesPlundered, …)
   clanId          String? // denormalized from ClanMember — kept in sync in-tx
   clanRole        String? // LEADER | OFFICER | MEMBER
@@ -144,10 +145,16 @@ model Player {
   targetedEvents        GameEvent[]         @relation("EventTarget")
   spyMissionsRun        SpyMission[]        @relation("SpyOwner")
   spyMissionsAgainstMe  SpyMission[]        @relation("SpyTarget")
+  titles                PlayerTitle[]
+  activeTitle           Title?              @relation("PlayerActiveTitle", fields: [activeTitleId], references: [id], onDelete: SetNull)
+  cosmetics             PlayerCosmetic[]
+  seasonWallets         SeasonWallet[]
+  seasonRewardClaims    SeasonRewardClaim[]
 
   @@index([power])
   @@index([honor])
   @@index([clanId])
+  @@index([seasonPoints])
   @@map("players")
 }
 
@@ -330,6 +337,8 @@ model Commander {
   skills       Json // active skills with cooldowns
   passive      Json // passive bonuses (basis points)
   lore         String?
+  /// Seasonal commanders are WIPED at season reset; permanent ones survive.
+  isSeasonal   Boolean @default(false)
   isActive     Boolean @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -809,14 +818,119 @@ model Season {
   startsAt  DateTime
   endsAt    DateTime
   status    String   @default("UPCOMING") // UPCOMING|ACTIVE|FINISHED
+  /// Set when the transactional reset ran — the at-most-once settlement claim.
+  settledAt DateTime?
+  /// Rules/rewards snapshot taken at creation (data-driven from config).
   config    Json? // duration, reward tiers, reset policy
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  snapshots Leaderboard[]
+  snapshots    Leaderboard[]
+  rewardClaims SeasonRewardClaim[]
+  wallets      SeasonWallet[]
 
   @@index([status, endsAt])
   @@map("seasons")
+}
+
+/// Per-player season settlement payout. Created by the reset transaction for
+/// every reward-tier finisher; claimed at most once (claimedAt conditional).
+model SeasonRewardClaim {
+  id          String    @id @default(cuid())
+  seasonId    String
+  playerId    String
+  rank        Int
+  score       Int
+  tierName    String
+  rewards     Json // resource payout { GOLD, CRYSTAL, ... } (numbers)
+  claimedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, playerId])
+  @@index([playerId, claimedAt])
+  @@map("season_reward_claims")
+}
+
+/// Season-scoped currency wallet — wiped by the season reset (seasonal).
+model SeasonWallet {
+  id        String   @id @default(cuid())
+  seasonId  String
+  playerId  String
+  shards    BigInt   @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, playerId])
+  @@map("season_wallets")
+}
+
+/// Permanent-progression catalog (seeded from config). Survives resets.
+model Cosmetic {
+  id       String  @id // slug
+  name     String
+  kind     String // AVATAR_FRAME|BANNER|CITY_THEME|EMBLEM
+  rarity   String // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+  source   String // SEASON_RANK|ACHIEVEMENT|SHOP
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owners PlayerCosmetic[]
+
+  @@map("cosmetics")
+}
+
+model PlayerCosmetic {
+  id             String   @id @default(cuid())
+  playerId       String
+  cosmeticId     String
+  acquiredSeason Int?
+  unlockedAt     DateTime @default(now())
+
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  cosmetic Cosmetic @relation(fields: [cosmeticId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, cosmeticId])
+  @@index([playerId, unlockedAt])
+  @@map("player_cosmetics")
+}
+
+/// Permanent-progression catalog (seeded from config). Survives resets.
+model Title {
+  id        String  @id // slug
+  name      String
+  rarity    String // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+  source    String // SEASON_RANK|ACHIEVEMENT|SHOP
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owners    PlayerTitle[]
+  activeFor Player[]       @relation("PlayerActiveTitle")
+
+  @@map("titles")
+}
+
+model PlayerTitle {
+  id             String   @id @default(cuid())
+  playerId       String
+  titleId        String
+  acquiredSeason Int?
+  unlockedAt     DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  title  Title  @relation(fields: [titleId], references: [id], onDelete: Restrict)
+
+  @@unique([playerId, titleId])
+  @@index([playerId, unlockedAt])
+  @@map("player_titles")
 }
 
 /// Materialized ranking rows. Recomputed by the ranking sweep; history per season.
