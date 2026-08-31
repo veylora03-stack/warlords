@@ -14,13 +14,16 @@
 import { defineRoute } from '@/lib/api/route-handler'
 import { ok } from '@/lib/api/response'
 import { getEnv } from '@/config/env'
-import { buildSessionCookie, requireAdmin, resolveAuthConfig } from '@/lib/auth'
+import { buildSessionCookie, requireAdminScope, resolveAuthConfig } from '@/lib/auth'
 import { simulateSeasonSettlement } from '@/lib/game/services/season-settlement.service'
 
 export const POST = defineRoute({}, async ({ request }) => {
   const env = getEnv()
   const cfg = resolveAuthConfig(env)
-  const { refreshed } = await requireAdmin(request, { refresh: true, config: cfg })
+  const { refreshed } = await requireAdminScope(request, 'season.settle', {
+    refresh: true,
+    config: cfg,
+  })
 
   const report = await simulateSeasonSettlement()
 

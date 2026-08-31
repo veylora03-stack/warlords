@@ -151,9 +151,27 @@ export interface TitleCatalogEntry {
 }
 
 export const TITLES: TitleCatalogEntry[] = [
-  { id: 'title-season-champion', name: 'Season Champion', rarity: 'LEGENDARY', source: 'SEASON_RANK', sortOrder: 1 },
-  { id: 'title-season-vanguard', name: 'Season Vanguard', rarity: 'EPIC', source: 'SEASON_RANK', sortOrder: 2 },
-  { id: 'title-season-veteran', name: 'Season Veteran', rarity: 'RARE', source: 'SEASON_RANK', sortOrder: 3 },
+  {
+    id: 'title-season-champion',
+    name: 'Season Champion',
+    rarity: 'LEGENDARY',
+    source: 'SEASON_RANK',
+    sortOrder: 1,
+  },
+  {
+    id: 'title-season-vanguard',
+    name: 'Season Vanguard',
+    rarity: 'EPIC',
+    source: 'SEASON_RANK',
+    sortOrder: 2,
+  },
+  {
+    id: 'title-season-veteran',
+    name: 'Season Veteran',
+    rarity: 'RARE',
+    source: 'SEASON_RANK',
+    sortOrder: 3,
+  },
 ]
 
 /** Cosmetics catalog (seeded; permanent once earned). */
@@ -166,10 +184,34 @@ export interface CosmeticCatalogEntry {
 }
 
 export const COSMETICS: CosmeticCatalogEntry[] = [
-  { id: 'cosmetic-golden-emblem', name: 'Golden Emblem', kind: 'EMBLEM', rarity: 'LEGENDARY', source: 'SEASON_RANK' },
-  { id: 'cosmetic-silver-banner', name: 'Silver Banner', kind: 'BANNER', rarity: 'EPIC', source: 'SEASON_RANK' },
-  { id: 'cosmetic-bronze-frame', name: 'Bronze Frame', kind: 'AVATAR_FRAME', rarity: 'RARE', source: 'SEASON_RANK' },
-  { id: 'cosmetic-founding-lord', name: 'Founding Lord Frame', kind: 'AVATAR_FRAME', rarity: 'MYTHIC', source: 'ACHIEVEMENT' },
+  {
+    id: 'cosmetic-golden-emblem',
+    name: 'Golden Emblem',
+    kind: 'EMBLEM',
+    rarity: 'LEGENDARY',
+    source: 'SEASON_RANK',
+  },
+  {
+    id: 'cosmetic-silver-banner',
+    name: 'Silver Banner',
+    kind: 'BANNER',
+    rarity: 'EPIC',
+    source: 'SEASON_RANK',
+  },
+  {
+    id: 'cosmetic-bronze-frame',
+    name: 'Bronze Frame',
+    kind: 'AVATAR_FRAME',
+    rarity: 'RARE',
+    source: 'SEASON_RANK',
+  },
+  {
+    id: 'cosmetic-founding-lord',
+    name: 'Founding Lord Frame',
+    kind: 'AVATAR_FRAME',
+    rarity: 'MYTHIC',
+    source: 'ACHIEVEMENT',
+  },
 ]
 
 // ── Invariant validation (fail fast on config edits) ─────────────────────────
@@ -197,7 +239,9 @@ export function validateSeasonRules(rules: SeasonRules = SEASON_RULES): string[]
       return
     }
     if (tier.fromRank !== expectedRank) {
-      problems.push(`tier ${index} (${tier.name}): expected fromRank ${expectedRank}, got ${tier.fromRank}`)
+      problems.push(
+        `tier ${index} (${tier.name}): expected fromRank ${expectedRank}, got ${tier.fromRank}`,
+      )
     }
     if (tier.toRank < tier.fromRank) {
       problems.push(`tier ${index} (${tier.name}): toRank below fromRank`)
@@ -250,14 +294,23 @@ export function seasonRewardKeysSubsetOfQuestKeys(rules: SeasonRules = SEASON_RU
 }
 
 /** Points for a building reaching `newLevel` (server-computed, data-driven). */
-export function seasonPointsForBuildingLevelUp(newLevel: number, rules: SeasonRules = SEASON_RULES): number {
+export function seasonPointsForBuildingLevelUp(
+  newLevel: number,
+  rules: SeasonRules = SEASON_RULES,
+): number {
   return rules.score.buildingLevelUpPointsPerNewLevel * newLevel
 }
 
 /** Points for a completed training batch (server-computed, data-driven). */
-export function seasonPointsForTrainedUnits(tier: number, count: number, rules: SeasonRules = SEASON_RULES): number {
+export function seasonPointsForTrainedUnits(
+  tier: number,
+  count: number,
+  rules: SeasonRules = SEASON_RULES,
+): number {
   const perUnit =
-    rules.score.unitTrainedPointsPerTier[Math.min(Math.max(tier, 1), rules.score.unitTrainedPointsPerTier.length) - 1]
+    rules.score.unitTrainedPointsPerTier[
+      Math.min(Math.max(tier, 1), rules.score.unitTrainedPointsPerTier.length) - 1
+    ]
   return perUnit * count
 }
 

@@ -33,11 +33,7 @@ import { logger } from '@/lib/logger'
 import { withKeyLock } from '@/lib/concurrency/mutex'
 import { withWriteRetry } from './player-registration.service'
 import type { Tx } from './player-bootstrap.service'
-import {
-  runEconomyTransaction,
-  grantResources,
-  ECONOMY_TX_OPTIONS,
-} from './economy.service'
+import { runEconomyTransaction, grantResources, ECONOMY_TX_OPTIONS } from './economy.service'
 import {
   PERMANENT_PROGRESSION_CATALOG,
   SEASONAL_RESET_CATALOG,
@@ -167,7 +163,13 @@ export async function awardSeasonPointsInTx(
     where: { id: playerId },
     data: { seasonPoints: { increment: points } },
   })
-  log.info('season points awarded', { playerId, points, source, seasonNumber: season.number, ...sourceMeta })
+  log.info('season points awarded', {
+    playerId,
+    points,
+    source,
+    seasonNumber: season.number,
+    ...sourceMeta,
+  })
   return points
 }
 
@@ -221,7 +223,11 @@ function tierPreview(tier: SeasonRewardTier): SeasonTierPreview {
 }
 
 /** Deterministic live rank of `playerId` (seasonPoints desc, then id asc). */
-async function liveRankOf(client: ReadClient, playerId: string, points: number): Promise<number | null> {
+async function liveRankOf(
+  client: ReadClient,
+  playerId: string,
+  points: number,
+): Promise<number | null> {
   if (points <= 0) return null
   const ahead = await client.player.count({
     where: { seasonPoints: { gt: points } },
@@ -277,8 +283,7 @@ export async function getSeasonView(playerId: string): Promise<SeasonView> {
           rank,
           shards: shards.toString(),
         },
-        settlementPending:
-          (season?.status === 'FINISHED' && season.settledAt === null) || false,
+        settlementPending: (season?.status === 'FINISHED' && season.settledAt === null) || false,
       }
     }, ECONOMY_TX_OPTIONS),
   )
@@ -491,7 +496,8 @@ export async function claimSeasonReward(
     const claim = (await tx.seasonRewardClaim.findUnique({
       where: { seasonId_playerId: { seasonId, playerId } },
       include: { season: { select: { number: true, settledAt: true } } },
-    })) as unknown as (ClaimRowFields & { season: { number: number; settledAt: Date | null } }) | null
+    })) as unknown as
+      (ClaimRowFields & { season: { number: number; settledAt: Date | null } }) | null
 
     if (!claim) {
       throw new AppError('SEASON_REWARD_NOT_FOUND', 'No season reward is waiting for this claim')

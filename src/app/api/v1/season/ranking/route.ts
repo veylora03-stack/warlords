@@ -26,11 +26,7 @@ export const GET = defineRoute({ query: rankingQuery }, async ({ request, query 
   const cfg = resolveAuthConfig(env)
   const { principal, refreshed } = await requirePlayer(request, { refresh: true, config: cfg })
 
-  const view = await getSeasonRankingView(
-    principal.player.id,
-    query.limit,
-    query.seasonId,
-  )
+  const view = await getSeasonRankingView(principal.player.id, query.limit, query.seasonId)
 
   const headers: Record<string, string> = {}
   if (refreshed) {

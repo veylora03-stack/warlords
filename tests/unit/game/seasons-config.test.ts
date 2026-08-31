@@ -94,7 +94,12 @@ describe('SEASON_RULES invariants', () => {
   })
 
   it('seasonal catalog names exactly the user contract (season rank · territory · season resources)', () => {
-    for (const required of ['PLAYER_SEASON_POINTS', 'TERRITORY_OWNERSHIP', 'SEASON_WALLETS', 'SEASONAL_COMMANDERS']) {
+    for (const required of [
+      'PLAYER_SEASON_POINTS',
+      'TERRITORY_OWNERSHIP',
+      'SEASON_WALLETS',
+      'SEASONAL_COMMANDERS',
+    ]) {
       expect(SEASONAL_RESET_CATALOG).toContain(required)
     }
   })
@@ -147,7 +152,9 @@ describe('SEASON_RULES invariants', () => {
 
 describe('season point helpers (data-driven, deterministic)', () => {
   it('building level-up points scale with the new level', () => {
-    expect(seasonPointsForBuildingLevelUp(1)).toBe(SEASON_RULES.score.buildingLevelUpPointsPerNewLevel)
+    expect(seasonPointsForBuildingLevelUp(1)).toBe(
+      SEASON_RULES.score.buildingLevelUpPointsPerNewLevel,
+    )
     expect(seasonPointsForBuildingLevelUp(5)).toBe(
       5 * SEASON_RULES.score.buildingLevelUpPointsPerNewLevel,
     )

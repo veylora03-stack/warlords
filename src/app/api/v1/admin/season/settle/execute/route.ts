@@ -17,7 +17,7 @@ import { defineRoute } from '@/lib/api/route-handler'
 import { ok } from '@/lib/api/response'
 import { AppError } from '@/lib/api/errors'
 import { getEnv } from '@/config/env'
-import { buildSessionCookie, requireAdmin, resolveAuthConfig } from '@/lib/auth'
+import { buildSessionCookie, requireAdminScope, resolveAuthConfig } from '@/lib/auth'
 import { settleSeason } from '@/lib/game/services/season-settlement.service'
 import { db } from '@/lib/db'
 
@@ -28,16 +28,18 @@ const executeBody = z.object({
 export const POST = defineRoute({ body: executeBody }, async ({ request, body }) => {
   const env = getEnv()
   const cfg = resolveAuthConfig(env)
-  const { principal, refreshed } = await requireAdmin(request, { refresh: true, config: cfg })
+  const { principal, refreshed } = await requireAdminScope(request, 'season.settle', {
+    refresh: true,
+    config: cfg,
+  })
 
   // Belt-and-braces: the operator must confirm WHICH season is being reset.
   const latest = await db.season.findFirst({ orderBy: { number: 'desc' } })
   if (!latest || latest.number !== body.seasonNumber) {
-    throw new AppError(
-      'SETTLEMENT_NOT_PENDING',
-      'seasonNumber does not match the current season',
-      { expected: latest?.number ?? null, received: body.seasonNumber },
-    )
+    throw new AppError('SETTLEMENT_NOT_PENDING', 'seasonNumber does not match the current season', {
+      expected: latest?.number ?? null,
+      received: body.seasonNumber,
+    })
   }
 
   const report = await settleSeason(principal.user.id)

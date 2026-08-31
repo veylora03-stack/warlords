@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { useHealthQuery } from '@/features/system'
 import { useMeQuery } from '@/features/auth'
+import { AdminPanel } from '@/features/admin'
 import {
   usePlayerProfileQuery,
   usePlayerStateQuery,
@@ -96,50 +97,58 @@ const PHASES: PhaseRow[] = [
     name: 'Seasonal System (season lifecycle · ranking · transactional reset · permanent progression)',
     state: 'done',
   },
+  {
+    id: '21',
+    name: 'Admin Panel (RBAC admin/moderator · player ops · inspections · announcements · audit trail)',
+    state: 'done',
+  },
   { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
   { id: '—', name: 'Territory, Quests & World', state: 'planned' },
   { id: '—', name: 'Telegram Bot', state: 'planned' },
   { id: '—', name: 'Mini App UI (full client)', state: 'planned' },
-  { id: '—', name: 'Admin Panel', state: 'planned' },
   { id: '—', name: 'Security Hardening & Deployment', state: 'planned' },
 ]
 
 const DELIVERABLES = [
   {
-    label: 'Season lifecycle — UPCOMING→ACTIVE→FINISHED resolved against the server clock',
-    file: 'src/lib/game/services/season.service.ts',
+    label: 'RBAC — scope matrix resolved server-side per request (never a hidden button)',
+    file: 'config/admin.ts ADMIN_ROLE_SCOPES + requireAdminScope',
   },
   {
-    label: 'Seasonal score — server-computed from REAL upgrades + training completions',
-    file: 'config/seasons.ts SEASON_RULES.score',
+    label: 'Player search + full inspection — name/id/telegram, wallet/city/army/ledger tails',
+    file: 'GET /api/v1/admin/players · /players/:id',
   },
   {
-    label: 'Live ranking — deterministic (points desc, id asc) · history materialized at settle',
-    file: 'Leaderboard (SEASON · SEASONAL)',
+    label: 'Ban/Unban — effective on the player’s next request (session-level enforcement)',
+    file: 'POST /api/v1/admin/players/:id/ban · /unban',
   },
   {
-    label: 'Transactional reset — at-most-once settledAt claim · all-or-nothing in ONE tx',
-    file: 'src/lib/game/services/season-settlement.service.ts',
+    label: 'Resource adjustment — ledger path (ADMIN_ADJUSTMENT) with before/after audit in-tx',
+    file: 'POST /api/v1/admin/players/:id/resources',
   },
   {
-    label: 'Reset SIMULATION — dry-run rolls back, zero persistence, full report first',
-    file: 'POST /admin/season/settle/simulate',
+    label: 'Battle + economy inspection — stored traces, supply and flow-by-reason aggregates',
+    file: 'GET /api/v1/admin/battles/:id · /admin/economy',
   },
   {
-    label: 'Permanent progression — achievements · cosmetics · titles · permanent commanders',
-    file: 'PERMANENT_PROGRESSION_CATALOG',
+    label: 'Event management — spawn/finish/cancel with conditional status claims',
+    file: 'POST /api/v1/admin/events …',
   },
   {
-    label: 'Seasonal wipe — season points · territory ownership · season wallets · seasonal commanders',
-    file: 'SEASONAL_RESET_CATALOG',
+    label: 'Clan management — inspect + typed-confirmation disband (war history protected)',
+    file: 'POST /api/v1/admin/clans/:id/disband',
   },
   {
-    label: 'Idempotent reward claim — conditional claimedAt + ledger idempotency key',
-    file: 'POST /api/v1/season/rewards/claim',
+    label: 'Announcements — create/activate/broadcast fan-out into notification inboxes',
+    file: 'POST /api/v1/admin/announcements/:id/broadcast',
   },
   {
-    label: 'Admin-gated settlement — SUPERADMIN role + active admin_users row · audited',
-    file: 'requireAdmin + AuditLog SEASON_SETTLE',
+    label: 'Audit trail — every mutation audited in-tx · inspections audited best-effort',
+    file: 'GET /api/v1/admin/audit-logs',
+  },
+  {
+    label: 'Staff management — grant ADMIN/MODERATOR by telegram id · revoke without lockout',
+    file: 'POST /api/v1/admin/staff · /staff/:id/deactivate',
   },
 ]
 
@@ -1449,16 +1458,28 @@ export default function WarlordsConsole() {
                         <span className="text-[11px] uppercase tracking-wider text-zinc-500">
                           permanent progression:
                         </span>
-                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                        <Badge
+                          variant="outline"
+                          className="border-zinc-700 text-[10px] text-zinc-400"
+                        >
                           {seasonProgression.achievements.length} achievements
                         </Badge>
-                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                        <Badge
+                          variant="outline"
+                          className="border-zinc-700 text-[10px] text-zinc-400"
+                        >
                           {seasonProgression.cosmetics.length} cosmetics
                         </Badge>
-                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                        <Badge
+                          variant="outline"
+                          className="border-zinc-700 text-[10px] text-zinc-400"
+                        >
                           {seasonProgression.titles.length} titles
                         </Badge>
-                        <Badge variant="outline" className="border-zinc-700 text-[10px] text-zinc-400">
+                        <Badge
+                          variant="outline"
+                          className="border-zinc-700 text-[10px] text-zinc-400"
+                        >
                           {seasonProgression.commanders.length} commanders
                         </Badge>
                         {seasonProgression.titles.length > 0 ? (
@@ -1485,10 +1506,12 @@ export default function WarlordsConsole() {
                           {season.rules.score.unitTrainedPointsPerTier.join('/')} pts/unit by tier
                         </span>
                         ); the reset is a single transaction that wipes
-                        <span className="text-orange-400"> season points · territory · season
-                        wallets · seasonal commanders</span> while achievements, cosmetics, titles
-                        and permanent commanders are preserved — and it is simulated (rolled-back
-                        dry-run) before it can execute.
+                        <span className="text-orange-400">
+                          {' '}
+                          season points · territory · season wallets · seasonal commanders
+                        </span>{' '}
+                        while achievements, cosmetics, titles and permanent commanders are preserved
+                        — and it is simulated (rolled-back dry-run) before it can execute.
                       </p>
                     </>
                   ) : null}
@@ -1549,6 +1572,12 @@ export default function WarlordsConsole() {
           </Card>
         </div>
 
+        {/* Admin Panel — rendered only for DB-backed staff sessions; every
+            action it offers is enforced server-side by the RBAC scope guard */}
+        <div className="mt-6 grid gap-4">
+          <AdminPanel />
+        </div>
+
         {/* Phase roadmap */}
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
@@ -1591,7 +1620,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 20 — Seasonal System Deliverables
+              Phase 21 — Admin Panel Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -1608,8 +1637,8 @@ export default function WarlordsConsole() {
             ))}
             <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 sm:col-span-2">
               <span className="min-w-0 text-xs text-zinc-300 [overflow-wrap:anywhere]">
-                Quality gate — lint · typecheck · format · unit + integration + e2e tests ·
-                reset simulation (zero-write proof) · idempotent claim (replay + concurrent) ·
+                Quality gate — lint · typecheck · format · unit + integration + e2e tests · reset
+                simulation (zero-write proof) · idempotent claim (replay + concurrent) ·
                 permanent-vs-seasonal survival matrix · unauthorized matrix green
               </span>
               <code className="min-w-0 shrink text-right font-mono text-[10px] leading-snug text-amber-400 [overflow-wrap:anywhere]">
@@ -1623,9 +1652,7 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>
-            WARLORDS Dev Console · Phase 20 · awaiting approval for Phase 21
-          </span>
+          <span>WARLORDS Dev Console · Phase 21 · awaiting approval for Phase 22</span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

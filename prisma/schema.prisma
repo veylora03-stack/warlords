@@ -155,6 +155,7 @@ model Player {
   @@index([honor])
   @@index([clanId])
   @@index([seasonPoints])
+  @@index([name]) // admin player search
   @@map("players")
 }
 
@@ -994,12 +995,15 @@ model WorldBossDamage {
 model GameEvent {
   id             String   @id @default(cuid())
   type           String // GOLD_RUSH|BANDIT_ATTACK|PLAGUE|FIRE|MERCHANT_FLEET|RARE_METEOR|NPC_INVASION|…
+  title          String? // operator-facing label (admin event management)
+  body           String? // operator-facing description
   scope          String   @default("GLOBAL") // GLOBAL|PLAYER|CLAN
   targetPlayerId String?
   startsAt       DateTime @default(now())
   endsAt         DateTime
   config         Json? // effect magnitudes (bps), spawn tables
   status         String   @default("SCHEDULED") // SCHEDULED|ACTIVE|FINISHED|CANCELLED
+  createdById    String? // admin user who spawned the event (audit companion)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

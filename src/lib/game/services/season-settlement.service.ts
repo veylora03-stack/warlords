@@ -35,11 +35,7 @@ import { AppError } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import type { Tx } from './player-bootstrap.service'
 import { ECONOMY_TX_OPTIONS } from './economy.service'
-import {
-  resolveSeasonStateInTx,
-  seasonRulesOrThrow,
-  type SeasonRow,
-} from './season.service'
+import { resolveSeasonStateInTx, seasonRulesOrThrow, type SeasonRow } from './season.service'
 import {
   SEASONAL_RESET_CATALOG,
   type SeasonRewardTier,
@@ -107,7 +103,10 @@ interface TierAssignment {
   players: RankedPlayer[]
 }
 
-async function finalRanking(tx: Tx, rules: SeasonRules): Promise<{
+async function finalRanking(
+  tx: Tx,
+  rules: SeasonRules,
+): Promise<{
   ranked: RankedPlayer[]
   unrankedCount: number
 }> {
@@ -253,7 +252,10 @@ export async function executeSettlementInTx(
   const titleWanted = new Set(titleGrantRows.map((row) => `${row.playerId}\u0000${row.titleId}`))
   if (titleWanted.size > 0) {
     const ownedTitles = await tx.playerTitle.findMany({
-      where: { playerId: { in: granteeIds }, titleId: { in: titleGrantRows.map((row) => row.titleId) } },
+      where: {
+        playerId: { in: granteeIds },
+        titleId: { in: titleGrantRows.map((row) => row.titleId) },
+      },
       select: { playerId: true, titleId: true },
     })
     for (const row of ownedTitles) titleWanted.delete(`${row.playerId}\u0000${row.titleId}`)
@@ -262,7 +264,9 @@ export async function executeSettlementInTx(
     titleWanted.size > 0
       ? (
           await tx.playerTitle.createMany({
-            data: titleGrantRows.filter((row) => titleWanted.has(`${row.playerId}\u0000${row.titleId}`)),
+            data: titleGrantRows.filter((row) =>
+              titleWanted.has(`${row.playerId}\u0000${row.titleId}`),
+            ),
           })
         ).count
       : 0
@@ -278,7 +282,8 @@ export async function executeSettlementInTx(
       },
       select: { playerId: true, cosmeticId: true },
     })
-    for (const row of ownedCosmetics) cosmeticWanted.delete(`${row.playerId}\u0000${row.cosmeticId}`)
+    for (const row of ownedCosmetics)
+      cosmeticWanted.delete(`${row.playerId}\u0000${row.cosmeticId}`)
   }
   const cosmeticsGranted =
     cosmeticWanted.size > 0
@@ -451,13 +456,10 @@ class SettlementSimulated extends Error {
  */
 export async function simulateSeasonSettlement(): Promise<SettlementReport> {
   try {
-    return await db.$transaction(
-      async (tx) => {
-        const report = await executeSettlementInTx(tx, { dryRun: true })
-        throw new SettlementSimulated(report)
-      },
-      ECONOMY_TX_OPTIONS,
-    )
+    return await db.$transaction(async (tx) => {
+      const report = await executeSettlementInTx(tx, { dryRun: true })
+      throw new SettlementSimulated(report)
+    }, ECONOMY_TX_OPTIONS)
   } catch (err) {
     if (err instanceof SettlementSimulated) return err.report
     throw err

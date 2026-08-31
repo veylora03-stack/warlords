@@ -18,16 +18,22 @@ import { authenticate } from './session.service'
 import { resolveAuthConfig, type AuthConfig } from './session.config'
 import { AppError } from '@/lib/api/errors'
 import { db } from '@/lib/db'
+import { adminRoleHasScope, adminScopesForRole, type AdminScope } from '@/lib/game/config/admin'
 import type { AuthPrincipal, RefreshedSession } from './session.types'
 
+interface ActiveAdminRow {
+  id: string
+  role: string
+}
+
 /** DB-backed active-admin check (admin_users is the revocation surface). */
-async function findActiveAdmin(userId: string): Promise<{ role: string } | null> {
+async function findActiveAdmin(userId: string): Promise<ActiveAdminRow | null> {
   const admin = await db.adminUser.findUnique({
     where: { userId },
-    select: { role: true, isActive: true },
+    select: { id: true, role: true, isActive: true },
   })
   if (!admin || !admin.isActive) return null
-  return { role: admin.role }
+  return { id: admin.id, role: admin.role }
 }
 
 export interface RequireAuthOptions {
@@ -72,23 +78,49 @@ export async function requirePlayer(
 }
 
 /**
- * Admin gate for operator-only routes (season settlement, future admin
- * tooling). Two independent checks — BOTH must pass:
- *   1. the authenticated user row carries role SUPERADMIN (DB-backed),
- *   2. an ACTIVE admin_users row exists (revocable without touching auth).
- * Never trust the client: a valid session without the admin role is 403.
+ * Admin gate for operator-only routes. The AdminUser row is the SINGLE
+ * source of authorization truth (DB-backed, revocable without touching
+ * auth); the requested SCOPE resolves through the RBAC matrix in
+ * config/admin.ts. A valid session without an active admin row is 403
+ * ADMIN_REQUIRED; an admin whose role lacks the scope is 403
+ * ADMIN_FORBIDDEN. No route ever trusts a client-declared role.
  */
-export async function requireAdmin(
+export async function requireAdminScope(
   request: Request,
+  scope: AdminScope,
   options: RequireAuthOptions = {},
-): Promise<RequireAuthResult & { adminRole: string }> {
+): Promise<RequireAuthResult & { adminUserId: string; adminRole: string }> {
   const { principal, refreshed } = await requireAuth(request, options)
-  if (principal.user.role !== 'SUPERADMIN') {
-    throw new AppError('ADMIN_REQUIRED', 'Administrator privileges required')
-  }
   const admin = await findActiveAdmin(principal.user.id)
   if (!admin) {
     throw new AppError('ADMIN_REQUIRED', 'Administrator privileges required')
   }
-  return { principal, refreshed, adminRole: admin.role }
+  if (!adminRoleHasScope(admin.role, scope)) {
+    throw new AppError('ADMIN_FORBIDDEN', `This action requires the ${scope} scope`)
+  }
+  return { principal, refreshed, adminUserId: principal.user.id, adminRole: admin.role }
+}
+
+/**
+ * Introspection for the admin panel UI (GET /api/v1/admin/me). Returns
+ * isStaff:false for non-staff callers instead of throwing — the panel is a
+ * VIEW over the same server-enforced scopes, never the enforcement itself.
+ */
+export async function resolveAdminContext(
+  request: Request,
+  options: RequireAuthOptions = {},
+): Promise<
+  | ({ isStaff: true; adminRole: string; scopes: readonly AdminScope[] } & RequireAuthResult)
+  | ({ isStaff: false } & RequireAuthResult)
+> {
+  const { principal, refreshed } = await requireAuth(request, options)
+  const admin = await findActiveAdmin(principal.user.id)
+  if (!admin) return { isStaff: false, principal, refreshed }
+  return {
+    isStaff: true,
+    adminRole: admin.role,
+    scopes: adminScopesForRole(admin.role),
+    principal,
+    refreshed,
+  }
 }
