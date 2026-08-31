@@ -48,6 +48,7 @@ import * as trainRouteModule from '../../../src/app/api/v1/army/train/route'
 import * as completeRouteModule from '../../../src/app/api/v1/army/train/[id]/complete/route'
 import * as cancelRouteModule from '../../../src/app/api/v1/army/train/[id]/cancel/route'
 import { AppError } from '../../../src/lib/api/errors'
+import { drainNotificationQueue } from '../../../src/lib/game/services/notification.service'
 import {
   cancelTraining,
   completeTraining,
@@ -589,11 +590,21 @@ describe('POST /api/v1/army/train/[id]/complete (claim lifecycle)', () => {
     const item = await queueItemRow(itemId)
     expect(item.status).toBe('DONE')
 
-    // TRAINING_COMPLETE notification written in the same transaction.
+    // TRAINING_COMPLETE is ENQUEUED in the same transaction (Phase 22
+    // engine) — the inbox row lands after the worker drains.
+    const queued = await db.notificationQueue.findFirst({
+      where: { playerId: compPlayerId, type: 'TRAINING_COMPLETE', dedupeKey: `training:${itemId}` },
+    })
+    expect(queued).not.toBeNull()
+    expect(queued!.status).toBe('PENDING')
+
+    await drainNotificationQueue({ workerId: 'army-test' })
+
     const notification = await db.notification.findFirst({
       where: { playerId: compPlayerId, type: 'TRAINING_COMPLETE' },
     })
     expect(notification).not.toBeNull()
+    expect(notification!.body).toContain('2 Swordsman')
   })
 
   it('refuses a double claim with TRAINING_NOT_ACTIVE', async () => {

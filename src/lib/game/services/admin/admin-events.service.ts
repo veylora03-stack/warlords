@@ -10,6 +10,9 @@
 
 import { db } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
+import { ADMIN_PANEL_POLICY } from '@/lib/game/config/admin'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
+import { enqueueNotificationFanOutInTx } from '@/lib/game/services/notification.service'
 import { recordAdminAuditInTx, recordAdminAuditView, type Paginated } from './admin-audit.service'
 
 const EVENT_TYPES = [
@@ -157,6 +160,28 @@ export async function createEvent(input: CreateEventInput): Promise<AdminEventRo
       include: { targetPlayer: { select: { name: true } } },
     })
 
+    // EVENT notice rides the notification engine (Phase 22): PLAYER-scope
+    // events notify their target; GLOBAL/CLAN fan out to the (capped) player
+    // set. Deduped by (player, EVENT, eventId) — a re-spawn of the same row
+    // cannot re-notify, and the worker delivers after this tx commits.
+    const eventTitle = input.title?.trim() || `${created.type} event`
+    const eventBody =
+      input.body?.trim() || `${created.type} event runs until ${created.endsAt.toISOString()}.`
+    const recipients =
+      created.scope === 'PLAYER'
+        ? [created.targetPlayerId!]
+        : (
+            await tx.player.findMany({
+              select: { id: true },
+              take: ADMIN_PANEL_POLICY.broadcastHardCap,
+            })
+          ).map((row) => row.id)
+    const notified = await enqueueNotificationFanOutInTx(tx, recipients, {
+      type: 'EVENT',
+      dedupeKeyFor: () => notificationDedupeKeys.event(created.id),
+      payloadFor: () => ({ eventId: created.id, title: eventTitle, body: eventBody }),
+    })
+
     await recordAdminAuditInTx(tx, {
       actorUserId: input.actorUserId,
       action: 'EVENT_SPAWN',
@@ -169,6 +194,7 @@ export async function createEvent(input: CreateEventInput): Promise<AdminEventRo
         endsAt: created.endsAt.toISOString(),
         status: created.status,
         targetPlayerId: created.targetPlayerId,
+        notifiedPlayers: notified,
       },
       reason: input.title,
       ip: input.ip,

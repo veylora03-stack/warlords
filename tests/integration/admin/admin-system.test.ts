@@ -59,6 +59,7 @@ import {
   POST as adminStaffPost,
 } from '../../../src/app/api/v1/admin/staff/route'
 import { POST as adminDeactivatePost } from '../../../src/app/api/v1/admin/staff/[id]/deactivate/route'
+import { drainNotificationQueue } from '../../../src/lib/game/services/notification.service'
 import type { ApiEnvelope } from '../../../src/types/api'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -194,6 +195,9 @@ afterAll(async () => {
   })
   await db.announcement.deleteMany({ where: { createdById: { in: userIds } } })
   await db.notification.deleteMany({
+    where: { player: { user: { telegramId: { in: tgIds } } } },
+  })
+  await db.notificationQueue.deleteMany({
     where: { player: { user: { telegramId: { in: tgIds } } } },
   })
   await db.clan.deleteMany({
@@ -656,6 +660,15 @@ describe('announcements (create → broadcast fan-out, audited)', () => {
     const body = (await res.json()) as ApiEnvelope<{ notifiedPlayers: number }>
     if (body.ok) expect(body.data.notifiedPlayers).toBe(playersBefore)
 
+    // The fan-out lands in the notification QUEUE (Phase 22 engine) —
+    // deduped by (player, ANNOUNCEMENT, announcementId).
+    const queued = await db.notificationQueue.findMany({
+      where: { type: 'ANNOUNCEMENT', playerId: victimPlayerId },
+    })
+    expect(queued.length).toBe(1)
+
+    // The worker renders + delivers the inbox rows.
+    await drainNotificationQueue({ workerId: 'admin-test' })
     const notifications = await db.notification.findMany({
       where: { type: 'ANNOUNCEMENT', playerId: victimPlayerId },
     })

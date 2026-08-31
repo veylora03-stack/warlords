@@ -27,6 +27,7 @@ import { db } from '@/lib/db'
 import { logger } from '@/lib/logger'
 import { bootstrapPlayer, type Tx } from './player-bootstrap.service'
 import { findFreeCityCoordinate } from './city-site.service'
+import { isUniqueConstraintError } from './prisma-errors'
 
 const log = logger.child({ module: 'game/player-registration' })
 
@@ -65,10 +66,7 @@ export function isTransientWriteError(err: unknown): boolean {
   )
 }
 
-/** True for Prisma unique-constraint violations (P2002). */
-export function isUniqueConstraintError(err: unknown): boolean {
-  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
-}
+export { isUniqueConstraintError }
 
 const RETRY_DELAYS_MS = [25, 50, 100, 200, 400]
 

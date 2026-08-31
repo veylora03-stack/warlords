@@ -150,6 +150,7 @@ model Player {
   cosmetics             PlayerCosmetic[]
   seasonWallets         SeasonWallet[]
   seasonRewardClaims    SeasonRewardClaim[]
+  queuedNotifications   NotificationQueue[]
 
   @@index([power])
   @@index([honor])
@@ -1048,6 +1049,44 @@ model Announcement {
   clan      Clan? @relation(fields: [clanId], references: [id], onDelete: SetNull)
 
   @@map("announcements")
+}
+
+/// Durable notification OUTBOX (Phase 22). Producers enqueue INSIDE the game
+/// transaction that caused the event (at-least-once); a worker claims rows
+/// with an atomic status flip, renders the catalog template server-side and
+/// delivers through the channel adapters (IN_APP inbox + Telegram Bot API).
+///
+/// Deduplication: @@unique([playerId, type, dedupeKey]) — the dedupeKey
+/// carries the EVENT IDENTITY (e.g. "construction:{buildingId}:{level}"),
+/// so a retried game action can never re-notify. Enqueue treats a unique
+/// violation as an idempotent no-op; fan-outs use skipDuplicates.
+///
+/// SQLite↔PG: no enums, JSON channels/payload, plain unique index — valid
+/// on both drivers. Terminal states: SENT | FAILED | SKIPPED.
+model NotificationQueue {
+  id             String    @id @default(cuid())
+  playerId       String
+  type           String // NOTIFICATION_TYPES catalog key (app-layer enforced)
+  dedupeKey      String // event identity — see model comment
+  channels       Json // ["IN_APP"] | ["IN_APP","TELEGRAM"] — resolved from the catalog at enqueue
+  payload        Json // template variables — validated against the per-type schema at enqueue
+  status         String    @default("PENDING") // PENDING|PROCESSING|SENT|FAILED|SKIPPED
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  availableAt    DateTime  @default(now()) // backoff-aware next eligible claim
+  claimedAt      DateTime?
+  claimedBy      String? // worker instance id (diagnostics)
+  lastError      String?
+  notificationId String? // inbox row created by IN_APP delivery (idempotent recovery)
+  createdAt      DateTime  @default(now())
+  processedAt    DateTime?
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, type, dedupeKey])
+  @@index([status, availableAt])
+  @@index([playerId, createdAt])
+  @@map("notification_queue")
 }
 
 // ────────────────────────────────────────── ADMIN, DIPLOMACY, MISC ──────────

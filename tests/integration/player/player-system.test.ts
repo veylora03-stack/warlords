@@ -33,6 +33,7 @@ import {
   runRegistrationTransaction,
 } from '../../../src/lib/game/services/player-registration.service'
 import { grantXp, XP_CAPS } from '../../../src/lib/game/services/progression.service'
+import { drainNotificationQueue } from '../../../src/lib/game/services/notification.service'
 import { recordPlayerStats, readPlayerStats } from '../../../src/lib/game/services/stats.service'
 import {
   computePlayerPower,
@@ -408,6 +409,16 @@ describe('XP & level progression — server-side grants only', () => {
     expect(result.leveledUp).toBe(true)
     expect(result.levelsGained).toBe(1)
     expect(result.level).toBe(2)
+
+    // The level-up notice is ENQUEUED (Phase 22 engine) — the inbox row
+    // lands after the worker drains.
+    const queued = await db.notificationQueue.findFirst({
+      where: { playerId, type: 'RANK_CHANGE', dedupeKey: `level_up:${playerId}:2` },
+    })
+    expect(queued).not.toBeNull()
+    expect(queued!.status).toBe('PENDING')
+
+    await drainNotificationQueue({ workerId: 'player-test' })
 
     const notification = await db.notification.findFirst({
       where: { playerId, type: 'RANK_CHANGE' },

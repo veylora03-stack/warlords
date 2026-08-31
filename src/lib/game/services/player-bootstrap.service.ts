@@ -20,6 +20,8 @@ import {
   STARTER_WALLET,
 } from '@/lib/game/config/starter'
 import { recalculatePlayerPower } from './power.service'
+import { enqueueNotificationInTx } from './notification.service'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import { emptyPlayerStats } from '@/lib/game/config/stats'
 
 export type Tx = Prisma.TransactionClient
@@ -130,13 +132,15 @@ export async function bootstrapPlayer(
     }),
   })
 
-  // 8) Welcome notification (outbox pattern — IN_APP first)
-  await tx.notification.create({
-    data: {
-      playerId: player.id,
-      type: 'REWARD',
-      title: 'Welcome to WARLORDS',
-      body: 'Your keep stands. Collect resources, train troops, and prepare for war.',
+  // 8) Welcome notice rides the notification engine's queue (Phase 22) —
+  //    keyed on the player id: exactly one welcome, ever.
+  await enqueueNotificationInTx(tx, {
+    playerId: player.id,
+    type: 'REWARD',
+    dedupeKey: notificationDedupeKeys.welcome(player.id),
+    payload: {
+      rewardTitle: 'Welcome to WARLORDS',
+      rewardBody: 'Your keep stands. Collect resources, train troops, and prepare for war.',
     },
   })
 

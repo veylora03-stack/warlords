@@ -57,6 +57,8 @@ import {
 import { recalculatePlayerPower } from '@/lib/game/services/power.service'
 import { awardSeasonPointsInTx } from '@/lib/game/services/season.service'
 import { seasonPointsForBuildingLevelUp } from '@/lib/game/config/seasons'
+import { enqueueNotificationInTx } from '@/lib/game/services/notification.service'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import type { Tx } from '@/lib/game/services/player-bootstrap.service'
 
 const log = logger.child({ module: 'game/city' })
@@ -391,12 +393,17 @@ export async function finishBuildingUpgradeInTx(
     { buildingType: type, newLevel },
   )
 
-  await tx.notification.create({
-    data: {
-      playerId,
-      type: 'CONSTRUCTION_COMPLETE',
-      title: `${def.name} upgraded`,
-      body: `${def.name} reached level ${newLevel}.`,
+  // Completion notice rides the notification engine's queue (Phase 22) —
+  // the dedupe key carries the EVENT IDENTITY (building + reached level),
+  // so a re-run of this claim can never re-notify.
+  await enqueueNotificationInTx(tx, {
+    playerId,
+    type: 'CONSTRUCTION_COMPLETE',
+    dedupeKey: notificationDedupeKeys.construction(building.id, newLevel),
+    payload: {
+      buildingType: type,
+      buildingName: def.name,
+      level: newLevel,
     },
   })
 

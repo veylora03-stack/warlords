@@ -165,6 +165,7 @@ export const NOTIFICATION_TYPES = [
   'WORLD_BOSS',
   'EVENT',
   'RANK_CHANGE',
+  'ANNOUNCEMENT', // admin broadcast fan-out (Phase 21 — engine-delivered since Phase 22)
 ] as const
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
 

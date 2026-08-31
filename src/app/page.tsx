@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { useHealthQuery } from '@/features/system'
 import { useMeQuery } from '@/features/auth'
 import { AdminPanel } from '@/features/admin'
+import { NotificationBell } from '@/features/notifications'
 import {
   usePlayerProfileQuery,
   usePlayerStateQuery,
@@ -102,6 +103,11 @@ const PHASES: PhaseRow[] = [
     name: 'Admin Panel (RBAC admin/moderator · player ops · inspections · announcements · audit trail)',
     state: 'done',
   },
+  {
+    id: '22',
+    name: 'Notification System (queueable engine · dedupe · worker · Telegram-ready channels)',
+    state: 'done',
+  },
   { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
   { id: '—', name: 'Territory, Quests & World', state: 'planned' },
   { id: '—', name: 'Telegram Bot', state: 'planned' },
@@ -111,44 +117,44 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'RBAC — scope matrix resolved server-side per request (never a hidden button)',
-    file: 'config/admin.ts ADMIN_ROLE_SCOPES + requireAdminScope',
+    label: 'Notification catalog — per-type Zod payload schemas · server-side templates · channels',
+    file: 'config/notifications.ts NOTIFICATION_PAYLOAD_SCHEMAS',
   },
   {
-    label: 'Player search + full inspection — name/id/telegram, wallet/city/army/ledger tails',
-    file: 'GET /api/v1/admin/players · /players/:id',
+    label:
+      'Queueable engine — enqueue inside game txs · atomic claim · backoff · crash-safe redelivery',
+    file: 'services/notification.service.ts drainNotificationQueue',
   },
   {
-    label: 'Ban/Unban — effective on the player’s next request (session-level enforcement)',
-    file: 'POST /api/v1/admin/players/:id/ban · /unban',
+    label:
+      'Duplicate prevention — (player, type, dedupeKey) unique · event-identity keys · idempotent fan-outs',
+    file: 'notificationDedupeKeys + @@unique([playerId,type,dedupeKey])',
   },
   {
-    label: 'Resource adjustment — ledger path (ADMIN_ADJUSTMENT) with before/after audit in-tx',
-    file: 'POST /api/v1/admin/players/:id/resources',
+    label: 'Worker — in-process drain loop (instrumentation boot) + admin synchronous tick',
+    file: 'worker/notification-worker.ts · POST /api/v1/admin/notifications/worker/tick',
   },
   {
-    label: 'Battle + economy inspection — stored traces, supply and flow-by-reason aggregates',
-    file: 'GET /api/v1/admin/battles/:id · /admin/economy',
+    label:
+      'Telegram Bot integration — real Bot API sendMessage · env-gated · retryable classification',
+    file: 'lib/telegram/send-message.ts',
   },
   {
-    label: 'Event management — spawn/finish/cancel with conditional status claims',
-    file: 'POST /api/v1/admin/events …',
+    label:
+      'Live emitters — construction · training · level-up · welcome · season ranks · event spawns · broadcasts',
+    file: 'city/army/progression/bootstrap/settlement/events/announcements services',
   },
   {
-    label: 'Clan management — inspect + typed-confirmation disband (war history protected)',
-    file: 'POST /api/v1/admin/clans/:id/disband',
+    label: 'Player inbox — list · unread counter · mark read (own rows only)',
+    file: 'GET /api/v1/player/notifications · /read · /unread-count',
   },
   {
-    label: 'Announcements — create/activate/broadcast fan-out into notification inboxes',
-    file: 'POST /api/v1/admin/announcements/:id/broadcast',
+    label: 'Ops view — outbox stats + recent rows by status/type (notifications.drain scope)',
+    file: 'GET /api/v1/admin/notifications/queue',
   },
   {
-    label: 'Audit trail — every mutation audited in-tx · inspections audited best-effort',
-    file: 'GET /api/v1/admin/audit-logs',
-  },
-  {
-    label: 'Staff management — grant ADMIN/MODERATOR by telegram id · revoke without lockout',
-    file: 'POST /api/v1/admin/staff · /staff/:id/deactivate',
+    label: 'Retention — terminal queue rows + read inbox rows pruned past the window',
+    file: 'pruneNotificationStorage (30d policy)',
   },
 ]
 
@@ -570,9 +576,12 @@ export default function WarlordsConsole() {
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-              <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                PHASE 20 COMPLETE
-              </Badge>
+              <div className="flex items-center gap-2">
+                <NotificationBell enabled={signedIn} />
+                <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
+                  PHASE 22 COMPLETE
+                </Badge>
+              </div>
               <span className="font-mono text-xs text-zinc-500">
                 {health ? `v${health.version}` : 'v—'}
               </span>
@@ -1620,7 +1629,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 21 — Admin Panel Deliverables
+              Phase 22 — Notification System Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">

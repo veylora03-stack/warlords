@@ -34,6 +34,11 @@ export const GET = defineRoute({}, async ({ request }) => {
       'army:train': 'POST /api/v1/army/train {unitId, count} (server-side cost + FIFO queue)',
       'army:train-complete': 'POST /api/v1/army/train/:id/complete (claim finished batch)',
       'army:train-cancel': 'POST /api/v1/army/train/:id/cancel (policy refund + queue re-walk)',
+      'player:notifications':
+        'GET /api/v1/player/notifications?limit&unreadOnly (engine-delivered inbox)',
+      'player:notifications-unread': 'GET /api/v1/player/notifications/unread-count',
+      'player:notifications-read':
+        'POST /api/v1/player/notifications/read {ids?|all} (own rows only)',
       'season:status': 'GET /api/v1/season (season lifecycle · rules · my standing)',
       'season:ranking':
         'GET /api/v1/season/ranking?limit&seasonId (live server-computed ranking · settled history)',
@@ -79,6 +84,10 @@ export const GET = defineRoute({}, async ({ request }) => {
         'POST /api/v1/admin/season/settle/simulate (DRY-RUN reset report — admin only)',
       'admin:season-settle-execute':
         'POST /api/v1/admin/season/settle/execute {seasonNumber} (transactional reset — admin only)',
+      'admin:notifications-queue':
+        'GET /api/v1/admin/notifications/queue?status&type (outbox ops view — notifications.drain)',
+      'admin:notifications-tick':
+        'POST /api/v1/admin/notifications/worker/tick (synchronous drain — notifications.drain)',
     },
     envelope: {
       success: '{ ok: true, data, meta: { requestId, serverTime } }',

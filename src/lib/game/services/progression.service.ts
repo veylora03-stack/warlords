@@ -19,6 +19,8 @@ import {
   MAX_TOTAL_XP,
   resolveLevelProgress,
 } from '@/lib/game/config/leveling'
+import { enqueueNotificationInTx } from '@/lib/game/services/notification.service'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 
 const log = logger.child({ module: 'game/progression' })
 
@@ -71,13 +73,18 @@ export async function grantXp(tx: Tx, input: GrantXpInput): Promise<GrantXpResul
   })
 
   if (gain.leveledUp) {
-    await tx.notification.create({
-      data: {
-        playerId,
-        type: LEVEL_UP_NOTIFICATION_TYPE,
-        title: `Level ${gain.level} reached`,
-        body: `${player.name} has grown stronger — level ${gain.level}.`,
-        data: { source, levelsGained: gain.levelsGained, level: gain.level },
+    // Level-up notice rides the notification engine's queue (Phase 22) —
+    // dedupe key carries the EVENT IDENTITY (player + reached level), so a
+    // level can never announce twice.
+    await enqueueNotificationInTx(tx, {
+      playerId,
+      type: LEVEL_UP_NOTIFICATION_TYPE,
+      dedupeKey: notificationDedupeKeys.levelUp(playerId, gain.level),
+      payload: {
+        kind: 'LEVEL_UP' as const,
+        level: gain.level,
+        levelsGained: gain.levelsGained,
+        source,
       },
     })
     log.info('player leveled up', {

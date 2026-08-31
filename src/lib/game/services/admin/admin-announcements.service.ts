@@ -10,6 +10,8 @@
 import { db } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { ADMIN_PANEL_POLICY } from '@/lib/game/config/admin'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
+import { enqueueNotificationFanOutInTx } from '@/lib/game/services/notification.service'
 import { recordAdminAuditInTx, recordAdminAuditView, type Paginated } from './admin-audit.service'
 
 export type AnnouncementAudience = 'ALL' | 'CLAN' | 'PLAYER'
@@ -204,25 +206,33 @@ export async function broadcastAnnouncement(input: {
       throw new AppError('VALIDATION_ERROR', 'No players match the announcement audience')
     }
 
-    const result = await tx.notification.createMany({
-      data: recipients.map((player) => ({
-        playerId: player.id,
+    // Fan-out through the notification engine's queue (Phase 22): the rows
+    // are deduped by (player, ANNOUNCEMENT, announcementId) — a replayed
+    // broadcast cannot re-notify — and the worker renders + delivers them
+    // (inbox; push channels per catalog) right after this tx commits.
+    const notified = await enqueueNotificationFanOutInTx(
+      tx,
+      recipients.map((player) => player.id),
+      {
         type: 'ANNOUNCEMENT',
-        title: announcement.title,
-        body: announcement.body,
-        data: { announcementId: announcement.id } as never,
-      })),
-    })
+        dedupeKeyFor: () => notificationDedupeKeys.announcement(announcement.id),
+        payloadFor: () => ({
+          announcementId: announcement.id,
+          title: announcement.title,
+          body: announcement.body,
+        }),
+      },
+    )
 
     await recordAdminAuditInTx(tx, {
       actorUserId: input.actorUserId,
       action: 'ANNOUNCE_BROADCAST',
       targetType: 'announcement',
       targetId: announcement.id,
-      after: { notifiedPlayers: result.count, audience: announcement.audience },
+      after: { notifiedPlayers: notified, audience: announcement.audience },
       ip: input.ip,
     })
 
-    return { announcementId: announcement.id, notifiedPlayers: result.count }
+    return { announcementId: announcement.id, notifiedPlayers: notified }
   })
 }

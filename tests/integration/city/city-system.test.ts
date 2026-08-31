@@ -37,6 +37,7 @@ import * as catalogRouteModule from '../../../src/app/api/v1/city/buildings/rout
 import * as upgradeRouteModule from '../../../src/app/api/v1/city/buildings/[type]/upgrade/route'
 import * as finishRouteModule from '../../../src/app/api/v1/city/buildings/[type]/finish/route'
 import { AppError } from '../../../src/lib/api/errors'
+import { drainNotificationQueue } from '../../../src/lib/game/services/notification.service'
 import {
   finishBuildingUpgrade,
   finishBuildingUpgradeInTx,
@@ -579,12 +580,33 @@ describe('POST finish — construction lifecycle (start · finish · status)', (
       ledgerBefore,
     )
 
-    // The outbox notification is written in the same transaction.
+    // The completion notice is ENQUEUED in the same transaction (Phase 22
+    // engine) — the inbox row lands when the worker drains the queue.
+    const farmRow = await db.building.findFirst({
+      where: { city: { playerId: upPlayerId }, type: 'FARM' },
+    })
+    expect(farmRow).not.toBeNull()
+    const queued = await db.notificationQueue.findUnique({
+      where: {
+        playerId_type_dedupeKey: {
+          playerId: upPlayerId,
+          type: 'CONSTRUCTION_COMPLETE',
+          dedupeKey: `construction:${farmRow!.id}:${body.data.newLevel}`,
+        },
+      },
+    })
+    expect(queued).not.toBeNull()
+    expect(queued!.status).toBe('PENDING')
+
+    const drain = await drainNotificationQueue({ workerId: 'city-test' })
+    expect(drain.sent).toBeGreaterThanOrEqual(1)
+
     const notifications = await db.notification.findMany({
       where: { playerId: upPlayerId, type: 'CONSTRUCTION_COMPLETE' },
     })
     expect(notifications.length).toBe(1)
     expect(notifications[0]!.body).toContain('level 2')
+    expect(notifications[0]!.title).toContain('Farm')
   })
 
   it('retries of the same claim are typed CONSTRUCTION_NOT_ACTIVE (level applied once)', async () => {

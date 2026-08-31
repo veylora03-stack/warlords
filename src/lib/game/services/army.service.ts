@@ -60,6 +60,8 @@ import { MAX_DELTA } from '@/lib/game/config/economy'
 import { recalculatePlayerPower } from '@/lib/game/services/power.service'
 import { awardSeasonPointsInTx } from '@/lib/game/services/season.service'
 import { seasonPointsForTrainedUnits } from '@/lib/game/config/seasons'
+import { enqueueNotificationInTx } from '@/lib/game/services/notification.service'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import type { Tx } from '@/lib/game/services/player-bootstrap.service'
 
 const log = logger.child({ module: 'game/army' })
@@ -462,12 +464,16 @@ export async function completeTrainingInTx(
     { unitId: item.unitId, tier: item.unit.tier, count: item.count },
   )
 
-  await tx.notification.create({
-    data: {
-      playerId,
-      type: 'TRAINING_COMPLETE',
-      title: `${item.unit.name} training complete`,
-      body: `${item.count} ${item.unit.name}(s) joined your army.`,
+  // Completion notice rides the notification engine's queue (Phase 22) —
+  // keyed on the training batch id, so a replayed claim cannot re-notify.
+  await enqueueNotificationInTx(tx, {
+    playerId,
+    type: 'TRAINING_COMPLETE',
+    dedupeKey: notificationDedupeKeys.training(item.id),
+    payload: {
+      unitId: item.unitId,
+      unitName: item.unit.name,
+      count: item.count,
     },
   })
 

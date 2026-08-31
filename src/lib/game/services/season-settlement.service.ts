@@ -35,6 +35,8 @@ import { AppError } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import type { Tx } from './player-bootstrap.service'
 import { ECONOMY_TX_OPTIONS } from './economy.service'
+import { enqueueNotificationFanOutInTx } from './notification.service'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import { resolveSeasonStateInTx, seasonRulesOrThrow, type SeasonRow } from './season.service'
 import {
   SEASONAL_RESET_CATALOG,
@@ -79,7 +81,7 @@ export interface SettlementReport {
     titlesGranted: number
     cosmeticsGranted: number
     achievementsGranted: number
-    notificationsCreated: number
+    rankChangesEnqueued: number
   }
   nextSeason: {
     number: number
@@ -134,6 +136,12 @@ function assignTiers(ranked: RankedPlayer[], rules: SeasonRules): TierAssignment
       players: ranked.filter((p) => p.rank >= tier.fromRank && p.rank <= tier.toRank),
     }))
     .filter((assignment) => assignment.players.length > 0)
+}
+
+/** Resolves the tier a finished rank belongs to (settlement context is complete). */
+function tierForRank(rank: number, tiered: TierAssignment[]): string {
+  const hit = tiered.find(({ tier }) => rank >= tier.fromRank && rank <= tier.toRank)
+  return hit?.tier.name ?? 'UNRANKED'
 }
 
 /**
@@ -197,12 +205,14 @@ export async function executeSettlementInTx(
   // 4) Per-tier payouts: SeasonRewardClaim rows (resource payouts claimed
   //    idempotently later) + permanent-progression grants (already-owned
   //    rows are pre-filtered and never re-granted — permanent progression is
-  //    idempotent) + one notification per finisher.
+  //    idempotent). The finisher's RANK_CHANGE notice rides the notification
+  //    engine's queue (Phase 22) — one row per ranked player, deduped by
+  //    (season, player), drained by the worker right after the tx commits.
   const claimRows: Prisma.SeasonRewardClaimCreateManyInput[] = []
-  const notifications: Prisma.NotificationCreateManyInput[] = []
   const titleGrantRows: Prisma.PlayerTitleCreateManyInput[] = []
   const cosmeticGrantRows: Prisma.PlayerCosmeticCreateManyInput[] = []
   const achievementGrantRows: Prisma.PlayerAchievementCreateManyInput[] = []
+  const rankedByPlayer = new Map(ranked.map((row) => [row.playerId, row]))
 
   for (const { tier, players } of tiered) {
     for (const player of players) {
@@ -213,13 +223,6 @@ export async function executeSettlementInTx(
         score: player.score,
         tierName: tier.name,
         rewards: tier.resources as unknown as Prisma.InputJsonValue,
-      })
-      notifications.push({
-        playerId: player.playerId,
-        type: 'REWARD',
-        title: `Season ${latest.number} finished — rank #${player.rank}`,
-        body: `${tier.name}: your reward is ready to claim.`,
-        data: { seasonId: latest.id, rank: player.rank } as Prisma.InputJsonValue,
       })
       for (const titleId of tier.titleIds) {
         titleGrantRows.push({
@@ -242,7 +245,33 @@ export async function executeSettlementInTx(
   }
 
   if (claimRows.length > 0) await tx.seasonRewardClaim.createMany({ data: claimRows })
-  if (notifications.length > 0) await tx.notification.createMany({ data: notifications })
+
+  // Rank-change fan-out through the engine (queue rows; the worker renders
+  // and delivers). Re-running settlement cannot re-notify: settlement is
+  // at-most-once AND the dedupe key is (season, player).
+  let rankChangesEnqueued = 0
+  if (ranked.length > 0) {
+    rankChangesEnqueued = await enqueueNotificationFanOutInTx(
+      tx,
+      ranked.map((row) => row.playerId),
+      {
+        type: 'RANK_CHANGE',
+        dedupeKeyFor: (playerId) => notificationDedupeKeys.seasonRank(latest.id, playerId),
+        payloadFor: (playerId) => {
+          const row = rankedByPlayer.get(playerId)
+          if (!row) throw new AppError('INTERNAL_ERROR', 'Settlement rank fan-out lost a player')
+          return {
+            kind: 'SEASON_RANK' as const,
+            seasonNumber: latest.number,
+            rank: row.rank,
+            tier: tierForRank(row.rank, tiered),
+            score: row.score,
+            rewardReady: true,
+          }
+        },
+      },
+    )
+  }
 
   // Permanent-progression grants: pre-filter already-owned pairs, insert only
   // the missing ones — idempotent by construction (re-settlement can never
@@ -419,7 +448,7 @@ export async function executeSettlementInTx(
       titlesGranted,
       cosmeticsGranted,
       achievementsGranted,
-      notificationsCreated: notifications.length,
+      rankChangesEnqueued,
     },
     nextSeason: {
       number: nextSeason.number,

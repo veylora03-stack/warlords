@@ -61,6 +61,8 @@ export const ADMIN_SCOPES = [
   'audit.view',
   'staff.manage',
   'season.settle',
+  // Notifications ops (Phase 22)
+  'notifications.drain',
 ] as const
 
 export type AdminScope = (typeof ADMIN_SCOPES)[number]
