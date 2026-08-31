@@ -7,6 +7,6 @@
  */
 
 export const APP_NAME = 'WARLORDS'
-export const APP_VERSION = '0.15.0-phase26'
-export const APP_PHASE = 26
-export const APP_PHASE_LABEL = 'Phase 26 — Production Deployment'
+export const APP_VERSION = '0.16.0-phase27'
+export const APP_PHASE = 27
+export const APP_PHASE_LABEL = 'Phase 27 — Final Production QA'

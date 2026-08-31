@@ -30,6 +30,7 @@ import {
 import { createBotRouter } from '../../../src/lib/telegram/bot'
 import { TelegramDeliveryError } from '../../../src/lib/telegram/send-message'
 import { db } from '../../../src/lib/db'
+import { APP_VERSION } from '../../../src/config/app'
 
 const SECRET = 'test-webhook-secret-91000266'
 const TOKEN = '123456:TEST-TOKEN-NOT-REAL'
@@ -83,7 +84,7 @@ describe('GET /health — liveness', () => {
     const body = (await response.json()) as Record<string, unknown>
     expect(body['status']).toBe('ok')
     expect(body['app']).toBe('warlords')
-    expect(body['version']).toBe('0.15.0-phase26')
+    expect(body['version']).toBe(APP_VERSION)
     expect(Number(body['uptimeSec'])).toBeGreaterThanOrEqual(0)
     expect(body['timestamp']).toBeString()
     // liveness must NOT carry db fields — that is /ready's job

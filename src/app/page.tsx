@@ -128,6 +128,11 @@ const PHASES: PhaseRow[] = [
     name: 'Production Deployment (Docker · health probes · Telegram webhook + commands · PG baseline migrations · deploy guide)',
     state: 'done',
   },
+  {
+    id: '27',
+    name: 'Final Production QA (589 tests · release journey E2E · live browser verification · honest release report)',
+    state: 'done',
+  },
   { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
   { id: '—', name: 'Territory, Quests & World', state: 'planned' },
   {
@@ -146,43 +151,33 @@ const PHASES: PhaseRow[] = [
 const DELIVERABLES = [
   {
     label:
-      'Health probes — liveness /health (dependency-free) + readiness /ready (timeboxed DB round-trip · prod config gate) + /api/health app report',
-    file: 'src/app/health · src/app/ready · lib/health',
+      'Release verdict — CONDITIONALLY READY: infrastructure release-grade (589 tests · build · smoke), battle/quests/market/clan content honestly gated pending their phases',
+    file: 'docs/PHASE27-FINAL-PRODUCTION-REPORT.md',
   },
   {
     label:
-      'PostgreSQL production migrations — committed PG schema + additive baseline (54 tables · 82 indexes) + migrate-deploy scripts',
-    file: 'prisma/postgres/ · bun run db:pg:deploy',
+      'Critical journey verified E2E — bot /start → PLAY → initData auth → bootstrap → city → resources → REAL 12s build → REAL 22s train → ranking 22 pts → notifications',
+    file: 'tests/integration/deploy/release-journey.test.ts (8/8)',
   },
   {
     label:
-      'Telegram webhook pipeline — constant-time secret gate · bounded read · command router (start/help/play/profile/rank) · Telegram-native status contract',
-    file: 'api/v1/telegram/webhook · lib/telegram/bot.ts',
+      'Live browser verification — UI upgrade → typed queue gate → FINISH claim → season points → notification bell → mark-read → mobile 390px, zero console errors',
+    file: 'Agent-Browser session record (Phase 27)',
   },
   {
     label:
-      'Bot production setup — one command configures webhook + Mini App menu button + real commands; --status / --delete rollback',
-    file: 'scripts/telegram/setup-bot.ts',
+      'All 27 areas audited — 10 systems production-ready with evidence · 12 model/catalog-only (honest N/A) · security/perf/deploy status in the report',
+    file: 'docs/PHASE27-FINAL-PRODUCTION-REPORT.md §2',
   },
   {
     label:
-      'Container — multi-stage Dockerfile (standalone output · non-root · HEALTHCHECK) + optional migrate entrypoint + PG parity compose',
-    file: 'Dockerfile · docker/docker-entrypoint.sh · docker-compose.yml',
+      'Bug register — zero critical, zero medium open; 3 low items resolved/documented (env template tracking · display-ghost correction · test-infra drain race)',
+    file: 'docs/PHASE27-FINAL-PRODUCTION-REPORT.md §4',
   },
   {
     label:
-      'Production-safe logging — per-query logs auto-disabled in prod, structured JSON + secret redaction everywhere else',
-    file: 'lib/db.ts · lib/logger',
-  },
-  {
-    label:
-      'Environment contract — full .env.example with REQUIRED-IN-PROD markers; secrets stay in platform stores, verified absent from Git',
-    file: '.env.example · DEPLOYMENT.md',
-  },
-  {
-    label:
-      'Deployment guide — platform walk-throughs (Render/Railway/Koyeb/Vercel + Supabase), migrations, bot setup, rollback, checklist',
-    file: 'DEPLOYMENT.md',
+      'Phase 26 deployment artifacts (probes · Docker · PG baseline · bot setup · guide) unchanged and re-verified by the full regression matrix',
+    file: 'DEPLOYMENT.md · Dockerfile · prisma/postgres/',
   },
 ]
 
@@ -607,7 +602,7 @@ export default function WarlordsConsole() {
               <div className="flex items-center gap-2">
                 <NotificationBell enabled={signedIn} />
                 <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                  PHASE 26 COMPLETE
+                  PHASE 27 COMPLETE
                 </Badge>
               </div>
               <span className="font-mono text-xs text-zinc-500">
@@ -1657,7 +1652,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 26 — Production Deployment Deliverables
+              Phase 27 — Final Production QA Verdict
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -1689,7 +1684,7 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>WARLORDS Dev Console · Phase 26 · awaiting approval for Phase 27</span>
+          <span>WARLORDS Dev Console · Phase 27 · release report issued</span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>
