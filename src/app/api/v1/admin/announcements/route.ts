@@ -52,6 +52,7 @@ export const POST = defineRoute({ body: createBody }, async ({ request, body }) 
   const { refreshed, adminUserId } = await requireAdminScope(request, 'announcements.create', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminWrite',
   })
 
   const created = await createAnnouncement({

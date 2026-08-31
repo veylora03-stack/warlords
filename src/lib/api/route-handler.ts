@@ -14,6 +14,50 @@ import { z } from 'zod'
 import { AppError, errors } from './errors'
 import { handle } from './response'
 
+// ── Transport hardening (Phase 23) ───────────────────────────────────────────
+
+/**
+ * Maximum accepted JSON body size. Enforced BEFORE `JSON.parse` — an
+ * unbounded body would let an authenticated caller (or a TLS-terminated
+ * bot) allocate server memory and burn parser CPU before Zod ever runs.
+ * 64 KiB is far above every legitimate payload (initData caps at 8 KiB).
+ */
+export const REQUEST_BODY_MAX_BYTES = 65_536
+
+/** Methods that can change state — the Origin check applies to these only. */
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+/**
+ * CSRF defense-in-depth: SameSite=Lax already blocks cross-site form POSTs,
+ * but cookie-authenticated writes are ALSO rejected when the browser-declared
+ * `Origin` host differs from the request host. Browsers cannot omit or forge
+ * Origin on cross-site fetch/form POSTs; native bearer-token clients and
+ * server-to-server calls send no Origin and are unaffected.
+ */
+function assertSameOriginIfDeclared(request: Request): void {
+  if (!UNSAFE_METHODS.has(request.method)) return
+  const origin = request.headers.get('origin')
+  if (!origin || origin === 'null') return
+  let originHost: string | null = null
+  try {
+    originHost = new URL(origin).host
+  } catch {
+    originHost = null
+  }
+  if (!originHost) return
+  let requestHost = request.headers.get('host')
+  if (!requestHost) {
+    try {
+      requestHost = new URL(request.url).host
+    } catch {
+      requestHost = null
+    }
+  }
+  if (requestHost && originHost.toLowerCase() !== requestHost.toLowerCase()) {
+    throw new AppError('FORBIDDEN_ORIGIN', 'Cross-site request origin rejected')
+  }
+}
+
 // ── Zod → AppError mapping ───────────────────────────────────────────────────
 
 export function zodErrorToAppError(err: z.ZodError): AppError {
@@ -26,10 +70,19 @@ export function zodErrorToAppError(err: z.ZodError): AppError {
 
 // ── Body parsing ─────────────────────────────────────────────────────────────
 
-/** Reads the JSON body. Empty/absent body → undefined; malformed JSON → AppError. */
+/**
+ * Reads the JSON body. Empty/absent body → undefined; malformed JSON → AppError;
+ * oversized body → typed 413 BEFORE parsing (memory/CPU exhaustion guard).
+ */
 export async function parseJsonBody(request: Request): Promise<unknown> {
   const raw = await request.text()
   if (raw.length === 0) return undefined
+  if (raw.length > REQUEST_BODY_MAX_BYTES) {
+    throw new AppError('BODY_TOO_LARGE', 'Request body exceeds the allowed size', {
+      maxBytes: REQUEST_BODY_MAX_BYTES,
+      receivedBytes: raw.length,
+    })
+  }
   try {
     return JSON.parse(raw) as unknown
   } catch {
@@ -91,6 +144,9 @@ export function defineRoute<TBody = undefined, TQuery = undefined, TParams = und
     routeCtx?: { params?: Promise<Record<string, string>> },
   ): Promise<Response> {
     return handle(request, async () => {
+      // CSRF defense-in-depth before any parsing/validation work.
+      assertSameOriginIfDeclared(request)
+
       let body: unknown = undefined
       let query: unknown = undefined
       let params: unknown = undefined

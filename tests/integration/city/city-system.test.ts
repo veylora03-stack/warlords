@@ -598,7 +598,10 @@ describe('POST finish — construction lifecycle (start · finish · status)', (
     expect(queued).not.toBeNull()
     expect(queued!.status).toBe('PENDING')
 
-    const drain = await drainNotificationQueue({ workerId: 'city-test' })
+    const drain = await drainNotificationQueue({
+      workerId: 'city-test',
+      telegramConfig: { token: null },
+    })
     expect(drain.sent).toBeGreaterThanOrEqual(1)
 
     const notifications = await db.notification.findMany({

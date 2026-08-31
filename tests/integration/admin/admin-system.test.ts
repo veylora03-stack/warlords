@@ -668,7 +668,7 @@ describe('announcements (create → broadcast fan-out, audited)', () => {
     expect(queued.length).toBe(1)
 
     // The worker renders + delivers the inbox rows.
-    await drainNotificationQueue({ workerId: 'admin-test' })
+    await drainNotificationQueue({ workerId: 'admin-test', telegramConfig: { token: null } })
     const notifications = await db.notification.findMany({
       where: { type: 'ANNOUNCEMENT', playerId: victimPlayerId },
     })

@@ -36,6 +36,7 @@ export const POST = defineRoute(
     const { refreshed, adminUserId } = await requireAdminScope(request, 'players.ban', {
       refresh: true,
       config: cfg,
+      rateLimit: 'adminWrite',
     })
 
     const result = await banPlayer({

@@ -22,6 +22,7 @@ export const POST = defineRoute({ params: paramsSchema }, async ({ request, para
   const { refreshed, adminUserId } = await requireAdminScope(request, 'announcements.manage', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminBroadcast',
   })
 
   const result = await broadcastAnnouncement({

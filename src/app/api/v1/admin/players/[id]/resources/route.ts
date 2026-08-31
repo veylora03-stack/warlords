@@ -14,17 +14,23 @@ import { ok } from '@/lib/api/response'
 import { getEnv } from '@/config/env'
 import { buildSessionCookie, requireAdminScope, resolveAuthConfig } from '@/lib/auth'
 import { adminAdjustResources } from '@/lib/game/services/economy.service'
-import { ECONOMY_RESOURCES } from '@/lib/game/config/economy'
+import { ECONOMY_RESOURCES, MAX_DELTA } from '@/lib/game/config/economy'
 import { clientIp } from '@/lib/api/request-info'
 
 const paramsSchema = z.object({ id: z.string().min(1).max(64) })
 const adjustBody = z.object({
   resource: z.enum(ECONOMY_RESOURCES),
-  /** Signed integer delta — positive credits, negative debits; never zero. */
+  /** Signed integer delta — positive credits, negative debits; never zero.
+   *  Magnitude is bounded here too (defense-in-depth — the economy service
+   *  enforces the same ceiling, but the API contract should not accept what
+   *  the invariant layer would refuse). */
   delta: z
     .number()
     .int()
-    .refine((v) => v !== 0, { message: 'delta must be non-zero' }),
+    .refine((v) => v !== 0, { message: 'delta must be non-zero' })
+    .refine((v) => Math.abs(v) <= Number(MAX_DELTA), {
+      message: `delta exceeds the single-mutation ceiling (±${MAX_DELTA})`,
+    }),
   note: z.string().min(4).max(500),
 })
 
@@ -36,7 +42,7 @@ export const POST = defineRoute(
     const { refreshed, adminUserId } = await requireAdminScope(
       request,
       'players.adjust_resources',
-      { refresh: true, config: cfg },
+      { refresh: true, config: cfg, rateLimit: 'adminWrite' },
     )
 
     const result = await adminAdjustResources({

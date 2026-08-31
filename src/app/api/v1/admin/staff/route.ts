@@ -28,6 +28,7 @@ export const GET = defineRoute({}, async ({ request }) => {
   const { refreshed, adminUserId } = await requireAdminScope(request, 'staff.manage', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminWrite',
   })
 
   const rows = await listStaff({ actorUserId: adminUserId })
@@ -45,6 +46,7 @@ export const POST = defineRoute({ body: grantBody }, async ({ request, body }) =
   const { refreshed, adminUserId } = await requireAdminScope(request, 'staff.manage', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminWrite',
   })
 
   const result = await grantStaff({

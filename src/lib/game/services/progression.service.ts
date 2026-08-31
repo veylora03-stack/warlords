@@ -18,6 +18,7 @@ import {
   LEVELING,
   MAX_TOTAL_XP,
   resolveLevelProgress,
+  type XpGainResult,
 } from '@/lib/game/config/leveling'
 import { enqueueNotificationInTx } from '@/lib/game/services/notification.service'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
@@ -62,15 +63,43 @@ export async function grantXp(tx: Tx, input: GrantXpInput): Promise<GrantXpResul
   })
   if (!player) throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
 
-  // BigInt → number is safe: XP is clamped to MAX_TOTAL_XP « 2^53 by design.
-  const currentXp = Number(player.xp)
-  const gain = applyXpGain(currentXp, amount)
-  const newXp = BigInt(gain.xp)
-
-  await tx.player.update({
-    where: { id: playerId },
-    data: { xp: newXp, level: gain.level },
-  })
+  // SECURITY (Phase 23): the xp/level write is a compare-and-set on the
+  // previously-read xp — a concurrent grantor can no longer be lost by a
+  // last-write-wins over the whole column. Each retry re-derives the level
+  // from the FRESH xp (the curve is a pure function of xp), so the final
+  // state and the level-up event reflect the actually-reached level.
+  // Bounded re-read/retry; exhaustion aborts the caller's transaction with
+  // a typed retry-safe 409.
+  const XP_CAS_MAX_ATTEMPTS = 8
+  let currentXp = Number(player.xp)
+  let levelBefore = player.level
+  let appliedGain: XpGainResult | null = null
+  for (let attempt = 0; attempt < XP_CAS_MAX_ATTEMPTS; attempt++) {
+    const gain = applyXpGain(currentXp, amount)
+    const guard = await tx.player.updateMany({
+      where: { id: playerId, xp: BigInt(currentXp) },
+      data: { xp: BigInt(gain.xp), level: gain.level },
+    })
+    if (guard.count === 1) {
+      appliedGain = gain
+      break
+    }
+    const fresh = await tx.player.findUnique({
+      where: { id: playerId },
+      select: { xp: true, level: true },
+    })
+    if (!fresh) throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
+    currentXp = Number(fresh.xp)
+    levelBefore = fresh.level
+  }
+  if (!appliedGain) {
+    throw new AppError(
+      'PROGRESSION_CONFLICT',
+      'Progression is under heavy contention — retry the operation',
+    )
+  }
+  const gain = appliedGain
+  const newLevel = gain.level
 
   if (gain.leveledUp) {
     // Level-up notice rides the notification engine's queue (Phase 22) —
@@ -79,18 +108,18 @@ export async function grantXp(tx: Tx, input: GrantXpInput): Promise<GrantXpResul
     await enqueueNotificationInTx(tx, {
       playerId,
       type: LEVEL_UP_NOTIFICATION_TYPE,
-      dedupeKey: notificationDedupeKeys.levelUp(playerId, gain.level),
+      dedupeKey: notificationDedupeKeys.levelUp(playerId, newLevel),
       payload: {
         kind: 'LEVEL_UP' as const,
-        level: gain.level,
+        level: newLevel,
         levelsGained: gain.levelsGained,
         source,
       },
     })
     log.info('player leveled up', {
       playerId,
-      from: player.level,
-      to: gain.level,
+      from: levelBefore,
+      to: newLevel,
       source,
     })
   }

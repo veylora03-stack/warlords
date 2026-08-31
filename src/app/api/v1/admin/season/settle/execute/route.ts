@@ -2,10 +2,12 @@
  * WARLORDS — POST /api/v1/admin/season/settle/execute (ADMIN ONLY).
  *
  * The REAL transactional season reset. Safety rails, in order:
- *   1. ADMIN gate (SUPERADMIN role + active admin_users row) — 403 otherwise
- *   2. body { seasonNumber } must MATCH the current season — a stale or
+ *   1. ADMIN gate (active admin_users row + season.settle scope) — 403 otherwise
+ *   2. typed destructive-op confirmation phrase in the body (same rail as
+ *      clan disband — a stray click cannot reset the season)
+ *   3. body { seasonNumber } must MATCH the current season — a stale or
  *      wrong number is a typed 409 (belt-and-braces against races)
- *   3. inside ONE transaction: at-most-once settledAt claim → final ranking
+ *   4. inside ONE transaction: at-most-once settledAt claim → final ranking
  *      → reward claims → permanent grants → seasonal wipe → next season →
  *      audit row (SEASON_SETTLE with the report summary)
  * Concurrent executors converge on exactly one winner; the losers roll back
@@ -19,10 +21,13 @@ import { AppError } from '@/lib/api/errors'
 import { getEnv } from '@/config/env'
 import { buildSessionCookie, requireAdminScope, resolveAuthConfig } from '@/lib/auth'
 import { settleSeason } from '@/lib/game/services/season-settlement.service'
+import { ADMIN_CONFIRMATIONS } from '@/lib/game/config/admin'
 import { db } from '@/lib/db'
 
 const executeBody = z.object({
   seasonNumber: z.number().int().min(1),
+  /** Typed destructive-op confirmation — stray clicks cannot reset a season. */
+  confirm: z.literal(ADMIN_CONFIRMATIONS.seasonSettle),
 })
 
 export const POST = defineRoute({ body: executeBody }, async ({ request, body }) => {
@@ -31,6 +36,7 @@ export const POST = defineRoute({ body: executeBody }, async ({ request, body })
   const { principal, refreshed } = await requireAdminScope(request, 'season.settle', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminSettle',
   })
 
   // Belt-and-braces: the operator must confirm WHICH season is being reset.

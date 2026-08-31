@@ -31,7 +31,11 @@ const trainBody = z.object({
 export const POST = defineRoute({ body: trainBody }, async ({ request, body }) => {
   const env = getEnv()
   const cfg = resolveAuthConfig(env)
-  const { principal, refreshed } = await requirePlayer(request, { refresh: true, config: cfg })
+  const { principal, refreshed } = await requirePlayer(request, {
+    refresh: true,
+    config: cfg,
+    rateLimit: 'playerWrite',
+  })
 
   const result = await recruitUnits(principal.player.id, body.unitId, body.count)
 

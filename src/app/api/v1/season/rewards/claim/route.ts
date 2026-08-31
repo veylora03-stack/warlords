@@ -27,7 +27,11 @@ const claimBody = z.object({
 export const POST = defineRoute({ body: claimBody }, async ({ request, body }) => {
   const env = getEnv()
   const cfg = resolveAuthConfig(env)
-  const { principal, refreshed } = await requirePlayer(request, { refresh: true, config: cfg })
+  const { principal, refreshed } = await requirePlayer(request, {
+    refresh: true,
+    config: cfg,
+    rateLimit: 'playerWrite',
+  })
 
   const result = await claimSeasonReward(principal.player.id, body.seasonId)
 

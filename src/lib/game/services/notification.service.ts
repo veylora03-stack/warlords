@@ -159,7 +159,14 @@ export interface FanOutNotificationInput<K extends NotificationType> {
  * the existing (playerId, dedupeKey) pairs and inserting the remainder;
  * a concurrent racer that slips through the filter falls back to per-row
  * inserts where P2002 resolves per player as an idempotent no-op.
+ *
+ * Batching (Phase 23): both the pre-read WHERE and the createMany are
+ * chunked below the platform bind-parameter ceilings (SQLite 32k / PG 65k
+ * — the pre-read alone binds ~2 params per player), so a broadcast at the
+ * configured hard cap cannot crash the causing transaction.
  */
+const FAN_OUT_CHUNK = 500
+
 export async function enqueueNotificationFanOutInTx<K extends NotificationType>(
   tx: Tx,
   playerIds: readonly string[],
@@ -181,21 +188,32 @@ export async function enqueueNotificationFanOutInTx<K extends NotificationType>(
     })
   }
 
-  const existingPairs = await tx.notificationQueue.findMany({
-    where: {
-      type: input.type,
-      playerId: { in: [...playerIds] },
-      dedupeKey: { in: rows.map((row) => row.dedupeKey) },
-    },
-    select: { playerId: true, dedupeKey: true },
-  })
-  const existing = new Set(existingPairs.map((pair) => `${pair.playerId}\u0000${pair.dedupeKey}`))
+  const existing = new Set<string>()
+  for (let i = 0; i < rows.length; i += FAN_OUT_CHUNK) {
+    const chunk = rows.slice(i, i + FAN_OUT_CHUNK)
+    const existingPairs = await tx.notificationQueue.findMany({
+      where: {
+        type: input.type,
+        playerId: { in: chunk.map((row) => row.playerId as string) },
+        dedupeKey: { in: chunk.map((row) => row.dedupeKey as string) },
+      },
+      select: { playerId: true, dedupeKey: true },
+    })
+    for (const pair of existingPairs) existing.add(`${pair.playerId}\u0000${pair.dedupeKey}`)
+  }
+
   const fresh = rows.filter((row) => !existing.has(`${row.playerId}\u0000${row.dedupeKey}`))
   if (fresh.length === 0) return 0
 
   try {
-    const result = await tx.notificationQueue.createMany({ data: fresh })
-    return result.count
+    let inserted = 0
+    for (let i = 0; i < fresh.length; i += FAN_OUT_CHUNK) {
+      const result = await tx.notificationQueue.createMany({
+        data: fresh.slice(i, i + FAN_OUT_CHUNK),
+      })
+      inserted += result.count
+    }
+    return inserted
   } catch (err) {
     if (!isUniqueConstraintError(err)) throw err
     // Concurrent fan-out inserted some of the same keys — resolve per row.
@@ -251,24 +269,111 @@ interface ProcessOutcome {
   error?: string
 }
 
+/**
+ * Identity of the CURRENT claim on a queue row. Every subsequent write to
+ * the row (inbox backlink, final status) is conditional on this identity,
+ * so a worker whose claim was stolen (stale-claim recovery) can no longer
+ * clobber the re-claiming worker's state or double-deliver.
+ */
+interface ClaimIdentity {
+  queueRowId: string
+  workerId: string
+  claimedAt: Date
+}
+
+/** Internal signal: our claim was superseded — abort everything, write nothing. */
+class StaleClaimError extends Error {
+  constructor() {
+    super('notification queue claim was superseded by another worker')
+  }
+}
+
 const TERMINAL_PRUNE_STATUSES = ['SENT', 'FAILED', 'SKIPPED'] as const
 
 function isNotificationType(type: string): type is NotificationType {
   return Object.prototype.hasOwnProperty.call(NOTIFICATION_PAYLOAD_SCHEMAS, type)
 }
 
+interface InboxDeliveryResult {
+  /** True when our claim was superseded mid-delivery — abort processing. */
+  lostClaim: boolean
+  inboxId: string | null
+}
+
 /**
- * Processes one claimed row. Delivery order: IN_APP first (idempotent via
- * the notificationId backlink), then the push channels. A push-channel
- * failure after a successful inbox write retries ONLY the push — the inbox
- * row is never duplicated.
+ * Creates the inbox row and links it to the queue row EXACTLY ONCE, inside
+ * ONE transaction whose queue-row write is conditional on the claim
+ * identity. The old code created the inbox outside any transaction: a row
+ * stuck in PROCESSING past staleClaimMs was re-claimable while the original
+ * worker still ran, and BOTH workers could see notificationId===null and
+ * both create an inbox row (duplicate delivery) — the Notification table
+ * has no natural unique key to backstop it. Now the stale worker's write
+ * matches zero rows, the transaction aborts, and only the re-claiming
+ * worker delivers.
+ */
+async function ensureInboxDelivered(
+  row: QueueRow,
+  rendered: { title: string; body: string },
+  payload: NotificationPayloadMap[NotificationType],
+  claim: ClaimIdentity,
+): Promise<InboxDeliveryResult> {
+  try {
+    const inboxId = await db.$transaction(async (tx) => {
+      // Re-read the backlink INSIDE the tx — our row snapshot may be stale.
+      const current = await tx.notificationQueue.findUnique({
+        where: { id: row.id },
+        select: { notificationId: true },
+      })
+      if (!current) {
+        // Row deleted between claim and delivery (player cascade) —
+        // nothing to link; treat as delivered.
+        return null
+      }
+      if (current.notificationId) return current.notificationId
+
+      const inbox = await tx.notification.create({
+        data: {
+          playerId: row.playerId,
+          type: row.type,
+          title: rendered.title,
+          body: rendered.body,
+          data: { queueId: row.id, ...(payload as Record<string, unknown>) } as never,
+        },
+      })
+      const guard = await tx.notificationQueue.updateMany({
+        where: {
+          id: claim.queueRowId,
+          status: 'PROCESSING',
+          claimedBy: claim.workerId,
+          claimedAt: claim.claimedAt,
+        },
+        data: { notificationId: inbox.id },
+      })
+      if (guard.count === 0) throw new StaleClaimError()
+      return inbox.id
+    })
+    return { lostClaim: false, inboxId }
+  } catch (cause) {
+    if (cause instanceof StaleClaimError) return { lostClaim: true, inboxId: null }
+    throw cause
+  }
+}
+
+/**
+ * Processes one claimed row. Delivery order: IN_APP first (claim-guarded,
+ * exactly-once via the notificationId backlink), then the push channels.
+ * A push-channel failure after a successful inbox write retries ONLY the
+ * push — the inbox row is never duplicated. Push delivery stays OUTSIDE
+ * any transaction (an HTTP call cannot roll back): notifications are
+ * therefore AT-LEAST-ONCE on push, exactly-once in the inbox — documented.
  */
 async function processQueueItem(
   row: QueueRow,
+  claim: ClaimIdentity,
   now: Date,
   fetchImpl: typeof fetch,
   telegramConfig: TelegramDeliveryConfig,
-): Promise<ProcessOutcome> {
+): Promise<ProcessOutcome | { kind: 'STALE' }> {
   if (!isNotificationType(row.type)) {
     // Unreachable: enqueue validates the type. A hand-corrupted row must
     // never loop the worker — park it, honestly failed.
@@ -276,13 +381,10 @@ async function processQueueItem(
   }
 
   let payload: NotificationPayloadMap[NotificationType]
-  let title: string
-  let body: string
+  let rendered: { title: string; body: string }
   try {
     payload = validateNotificationPayload(row.type, row.payload)
-    const rendered = renderNotification(row.type, payload)
-    title = rendered.title
-    body = rendered.body
+    rendered = renderNotification(row.type, payload)
   } catch (cause) {
     return {
       kind: 'FAILED',
@@ -294,24 +396,10 @@ async function processQueueItem(
     ? (row.channels as NotificationChannel[])
     : ['IN_APP' as const]
 
-  // 1) IN_APP — create the inbox row once (crash between create and the
-  //    queue update replays into the notificationId check, not a dupe).
-  let inboxId = row.notificationId
-  if (channels.includes('IN_APP') && !inboxId) {
-    const inbox = await db.notification.create({
-      data: {
-        playerId: row.playerId,
-        type: row.type,
-        title,
-        body,
-        data: { queueId: row.id, ...(payload as Record<string, unknown>) } as never,
-      },
-    })
-    inboxId = inbox.id
-    await db.notificationQueue.update({
-      where: { id: row.id },
-      data: { notificationId: inboxId },
-    })
+  // 1) IN_APP — exactly-once through the claim-guarded backlink write.
+  if (channels.includes('IN_APP')) {
+    const delivery = await ensureInboxDelivered(row, rendered, payload, claim)
+    if (delivery.lostClaim) return { kind: 'STALE' }
   }
 
   // 2) Push channels — real transport, env-gated capability.
@@ -336,7 +424,11 @@ async function processQueueItem(
     }
     try {
       await sendTelegramMessage(
-        { token: telegramConfig.token, chatId: user.telegramId, text: `${title}\n\n${body}` },
+        {
+          token: telegramConfig.token,
+          chatId: user.telegramId,
+          text: `${rendered.title}\n\n${rendered.body}`,
+        },
         fetchImpl,
       )
     } catch (cause) {
@@ -350,16 +442,29 @@ async function processQueueItem(
   return { kind: 'SENT' }
 }
 
+/**
+ * Parks a processed row in its terminal/retry state — conditional on the
+ * claim identity, so a superseded worker cannot clobber the re-claiming
+ * worker's state (double-counted attempts, lost backoff). Returns 'STALE'
+ * when the write matched nothing: the row now belongs to someone else.
+ */
 async function finalizeQueueRow(
-  rowId: string,
+  claim: ClaimIdentity,
   attempts: number,
   maxAttempts: number,
   outcome: ProcessOutcome,
   now: Date,
-): Promise<'SENT' | 'SKIPPED' | 'RETRY' | 'FAILED'> {
+): Promise<'SENT' | 'SKIPPED' | 'RETRY' | 'FAILED' | 'STALE'> {
+  const guardWhere = {
+    id: claim.queueRowId,
+    status: 'PROCESSING' as const,
+    claimedBy: claim.workerId,
+    claimedAt: claim.claimedAt,
+  }
+
   if (outcome.kind === 'SENT' || outcome.kind === 'SKIPPED') {
-    await db.notificationQueue.update({
-      where: { id: rowId },
+    const guard = await db.notificationQueue.updateMany({
+      where: guardWhere,
       data: {
         status: outcome.kind,
         processedAt: now,
@@ -368,13 +473,13 @@ async function finalizeQueueRow(
         claimedBy: null,
       },
     })
-    return outcome.kind
+    return guard.count === 1 ? outcome.kind : 'STALE'
   }
 
   // RETRY / FAILED — bounded attempts with exponential backoff.
   if (outcome.kind === 'RETRY' && attempts < maxAttempts) {
-    await db.notificationQueue.update({
-      where: { id: rowId },
+    const guard = await db.notificationQueue.updateMany({
+      where: guardWhere,
       data: {
         status: 'PENDING',
         availableAt: new Date(now.getTime() + notificationBackoffDelayMs(attempts)),
@@ -383,11 +488,11 @@ async function finalizeQueueRow(
         claimedBy: null,
       },
     })
-    return 'RETRY'
+    return guard.count === 1 ? 'RETRY' : 'STALE'
   }
 
-  await db.notificationQueue.update({
-    where: { id: rowId },
+  const guard = await db.notificationQueue.updateMany({
+    where: guardWhere,
     data: {
       status: 'FAILED',
       processedAt: now,
@@ -396,7 +501,7 @@ async function finalizeQueueRow(
       claimedBy: null,
     },
   })
-  return 'FAILED'
+  return guard.count === 1 ? 'FAILED' : 'STALE'
 }
 
 /**
@@ -452,15 +557,27 @@ export async function drainNotificationQueue(
     if (claim.count === 0) continue
     result.claimed += 1
 
+    const claimIdentity: ClaimIdentity = {
+      queueRowId: candidate.id,
+      workerId,
+      claimedAt: now,
+    }
+
     const row = await db.notificationQueue.findUnique({ where: { id: candidate.id } })
     if (!row) {
       // Deleted between claim and read (player cascade) — nothing to do.
       continue
     }
 
-    let outcome: ProcessOutcome
+    let outcome: ProcessOutcome | { kind: 'STALE' }
     try {
-      outcome = await processQueueItem(row as QueueRow, now, fetchImpl, telegramConfig)
+      outcome = await processQueueItem(
+        row as QueueRow,
+        claimIdentity,
+        now,
+        fetchImpl,
+        telegramConfig,
+      )
     } catch (cause) {
       // Defensive: an unexpected throw must not kill the tick.
       outcome = {
@@ -469,11 +586,27 @@ export async function drainNotificationQueue(
       }
     }
 
-    const parked = await finalizeQueueRow(row.id, row.attempts, row.maxAttempts, outcome, now)
+    if (outcome.kind === 'STALE') {
+      // Our claim was stolen while we worked — the re-claiming worker owns
+      // this row now; write nothing and count nothing.
+      log.warn('notification claim superseded mid-processing', {
+        queueId: row.id,
+        workerId,
+      })
+      continue
+    }
+
+    const parked = await finalizeQueueRow(
+      claimIdentity,
+      row.attempts,
+      row.maxAttempts,
+      outcome,
+      now,
+    )
     if (parked === 'SENT') result.sent += 1
     else if (parked === 'SKIPPED') result.skipped += 1
     else if (parked === 'RETRY') result.retried += 1
-    else {
+    else if (parked === 'FAILED') {
       result.failed += 1
       log.error('notification delivery failed terminally', {
         queueId: row.id,
@@ -482,6 +615,9 @@ export async function drainNotificationQueue(
         attempts: row.attempts,
         error: outcome.error,
       })
+    } else {
+      // Finalize raced a stale-claim recovery — same handling as above.
+      log.warn('notification finalize lost its claim', { queueId: row.id, workerId })
     }
   }
 
@@ -534,12 +670,23 @@ export const notificationListQuerySchema = z.object({
     .transform((v) => v === 'true'),
 })
 
+/** Parsed shape of the inbox query (route owns parsing via defineRoute). */
+export interface NotificationListQuery {
+  limit?: number | undefined
+  unreadOnly?: boolean | undefined
+}
+
 export async function listPlayerNotifications(
   playerId: string,
-  query: { limit?: string | undefined; unreadOnly?: string | undefined } = {},
+  query: NotificationListQuery = {},
 ): Promise<ListNotificationsResult> {
+  // Re-validating the parsed shape costs nothing and keeps the service
+  // safe for direct callers; VALIDATION_ERROR (not a raw ZodError) on junk.
   const { limit = NOTIFICATION_POLICY.listDefaultLimit, unreadOnly = false } =
-    notificationListQuerySchema.parse(query ?? {})
+    notificationListQuerySchema.parse({
+      limit: query.limit === undefined ? undefined : String(query.limit),
+      unreadOnly: query.unreadOnly === undefined ? undefined : query.unreadOnly ? 'true' : 'false',
+    })
   const [rows, unreadCount] = await Promise.all([
     db.notification.findMany({
       where: { playerId, ...(unreadOnly ? { isRead: false } : {}) },

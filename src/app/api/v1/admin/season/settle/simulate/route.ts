@@ -23,6 +23,7 @@ export const POST = defineRoute({}, async ({ request }) => {
   const { refreshed } = await requireAdminScope(request, 'season.settle', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminSettle',
   })
 
   const report = await simulateSeasonSettlement()

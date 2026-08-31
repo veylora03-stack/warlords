@@ -418,7 +418,7 @@ describe('XP & level progression — server-side grants only', () => {
     expect(queued).not.toBeNull()
     expect(queued!.status).toBe('PENDING')
 
-    await drainNotificationQueue({ workerId: 'player-test' })
+    await drainNotificationQueue({ workerId: 'player-test', telegramConfig: { token: null } })
 
     const notification = await db.notification.findFirst({
       where: { playerId, type: 'RANK_CHANGE' },

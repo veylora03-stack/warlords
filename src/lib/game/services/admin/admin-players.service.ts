@@ -315,7 +315,18 @@ function assertReason(reason: unknown): string {
   return reason.trim()
 }
 
-/** Bans the player's USER account — every authenticated request then 403s. */
+/**
+ * Bans the player's USER account — every authenticated request then 403s.
+ *
+ * SECURITY (Phase 23): staff accounts are NOT bannable through this path.
+ * Ban enforcement runs on EVERY authenticated request, so banning a
+ * player that belongs to an active staff member would lock that staff
+ * member out of the admin panel — including `players.unban` — i.e. a
+ * MODERATOR could escalate against an ADMIN (and against themself).
+ * Staff access is revoked exclusively through `staff.deactivate`
+ * (staff.manage scope, self-target guarded). The actor also cannot ban
+ * themself. Both refusals are typed 403s, before any write.
+ */
 export async function banPlayer(input: BanPlayerInput): Promise<BanPlayerResult> {
   const reason = assertReason(input.reason)
   const now = new Date()
@@ -323,9 +334,28 @@ export async function banPlayer(input: BanPlayerInput): Promise<BanPlayerResult>
   return db.$transaction(async (tx) => {
     const player = await tx.player.findUnique({
       where: { id: input.playerId },
-      select: { id: true, name: true, user: { select: { id: true, isBanned: true } } },
+      select: {
+        id: true,
+        name: true,
+        user: {
+          select: {
+            id: true,
+            isBanned: true,
+            adminRecord: { select: { id: true, isActive: true } },
+          },
+        },
+      },
     })
     if (!player) throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
+    if (player.user.adminRecord?.isActive) {
+      throw new AppError(
+        'PROTECTED_TARGET',
+        'Staff accounts cannot be banned — deactivate staff access instead',
+      )
+    }
+    if (player.user.id === input.actorUserId) {
+      throw new AppError('SELF_TARGET', 'You cannot ban your own account')
+    }
     if (player.user.isBanned) {
       throw new AppError('PLAYER_ALREADY_BANNED', 'This player is already banned')
     }

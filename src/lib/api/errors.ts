@@ -68,6 +68,15 @@ export const ERROR_CODES = {
   CLAN_HAS_WARS: 409,
   CONFIRMATION_REQUIRED: 400,
   ANNOUNCEMENT_INACTIVE: 409,
+  // Security hardening (Phase 23)
+  /** Optimistic-CAS credit could not settle within its bounded retry budget. */
+  RESOURCE_WALLET_CONFLICT: 409,
+  /** XP CAS could not settle within its bounded retry budget. */
+  PROGRESSION_CONFLICT: 409,
+  /** Cross-site write rejected (Origin/host mismatch on an unsafe method). */
+  FORBIDDEN_ORIGIN: 403,
+  /** Request body exceeds the size ceiling (checked BEFORE JSON.parse). */
+  BODY_TOO_LARGE: 413,
   // Not found (404)
   NOT_FOUND: 404,
   PLAYER_NOT_FOUND: 404,

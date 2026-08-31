@@ -22,8 +22,11 @@
  *    ledger rows).
  *  - RACE-SAFE — standalone economy transactions serialize behind a
  *    per-player in-process mutex (FIFO) with bounded transient-retry;
- *    tx-embedded calls inherit the caller's serialization duty. The
- *    conditional debit guard above remains the DB-level backstop.
+ *    tx-embedded calls inherit the caller's serialization duty. DEBITS are
+ *    persisted through a conditional compare-and-decrement and CREDITS
+ *    through a bounded compare-and-set loop, both re-verified against the
+ *    stored row — the DB-level backstop that keeps balances correct even
+ *    if the in-process mutex were bypassed (multi-instance future).
  *  - DUPLICATE-PROOF GRANTS — `grantResources` accepts an idempotency key
  *    persisted in the SAME transaction as the payout; a replay returns the
  *    original result instead of paying twice.
@@ -196,6 +199,113 @@ function toSafeNumber(value: bigint): number {
   return Number(value)
 }
 
+/**
+ * Bounded re-read/retry budget for the optimistic-CAS credit path. Two
+ * racing writers converge after one failed compare-and-set; the budget
+ * only exhausts under pathological contention (then the caller's tx aborts
+ * with a typed 409 and nothing is committed — retry-safe).
+ */
+const CREDIT_CAS_MAX_ATTEMPTS = 8
+
+/** Reads one wallet field fresh (inside the caller's tx) for CAS retries. */
+async function readWalletField(tx: Tx, playerId: string, field: WalletField): Promise<bigint> {
+  const wallet = await tx.resourceWallet.findUnique({
+    where: { playerId },
+    select: { [field]: true },
+  })
+  if (!wallet) throw new AppError('INTERNAL_ERROR', 'Player wallet is missing')
+  return wallet[field]
+}
+
+/**
+ * Persists one wallet CREDIT through a compare-and-set loop: write is
+ * accepted ONLY if the stored balance still equals the value the plan was
+ * computed from; otherwise the fresh balance is re-read and the (cap-
+ * clamped) credit is re-planned. This is the DB-level guarantee that two
+ * concurrent credits can never last-write-wins the wallet row — without
+ * it, an interleaved debit + credit could silently mint resources
+ * (balance=stored, Σledger=lower) on any multi-instance deployment.
+ * Mutates the plan entry so the ledger rows reconcile EXACTLY.
+ */
+async function persistWalletCredit(
+  tx: Tx,
+  playerId: string,
+  entry: AppliedResourceDelta,
+  field: WalletField,
+): Promise<void> {
+  const cap = RESOURCE_CAPS[entry.resource]
+  let current = entry.balanceBefore
+  for (let attempt = 0; attempt < CREDIT_CAS_MAX_ATTEMPTS; attempt++) {
+    const credit = creditWithCap(current, entry.requestedDelta, cap)
+    if (credit.applied === 0n) {
+      // Fully capped against the FRESH balance — honest skip.
+      entry.balanceBefore = current
+      entry.balanceAfter = current
+      entry.appliedDelta = 0n
+      entry.capped = true
+      entry.skipped = true
+      return
+    }
+    const guard = await tx.resourceWallet.updateMany({
+      where: { playerId, [field]: current } as Prisma.ResourceWalletWhereInput,
+      data: { [field]: credit.balanceAfter } as Prisma.ResourceWalletUpdateInput,
+    })
+    if (guard.count === 1) {
+      entry.balanceBefore = current
+      entry.balanceAfter = credit.balanceAfter
+      entry.appliedDelta = credit.applied
+      entry.capped = credit.capped
+      entry.skipped = false
+      return
+    }
+    current = await readWalletField(tx, playerId, field)
+  }
+  throw new AppError(
+    'RESOURCE_WALLET_CONFLICT',
+    `Wallet for ${entry.resource} is under heavy contention — retry the operation`,
+  )
+}
+
+/** GEMS twin of `persistWalletCredit` — the premium currency lives on Player. */
+async function persistGemsCredit(
+  tx: Tx,
+  playerId: string,
+  entry: AppliedResourceDelta,
+): Promise<void> {
+  const cap = RESOURCE_CAPS.GEMS
+  let current = entry.balanceBefore
+  for (let attempt = 0; attempt < CREDIT_CAS_MAX_ATTEMPTS; attempt++) {
+    const credit = creditWithCap(current, entry.requestedDelta, cap)
+    if (credit.applied === 0n) {
+      entry.balanceBefore = current
+      entry.balanceAfter = current
+      entry.appliedDelta = 0n
+      entry.capped = true
+      entry.skipped = true
+      return
+    }
+    const guard = await tx.player.updateMany({
+      where: { id: playerId, gems: current },
+      data: { gems: credit.balanceAfter },
+    })
+    if (guard.count === 1) {
+      entry.balanceBefore = current
+      entry.balanceAfter = credit.balanceAfter
+      entry.appliedDelta = credit.applied
+      entry.capped = credit.capped
+      entry.skipped = false
+      return
+    }
+    const fresh = await tx.player.findUnique({ where: { id: playerId }, select: { gems: true } })
+    if (!fresh) throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
+    current = fresh.gems
+  }
+  throw new AppError(
+    'RESOURCE_WALLET_CONFLICT',
+    `Wallet for GEMS is under heavy contention — retry the operation`,
+  )
+}
+
 // ── Balance reads ────────────────────────────────────────────────────────────
 
 async function assertPlayerExists(client: ReadClient, playerId: string): Promise<void> {
@@ -333,10 +443,9 @@ export async function applyResourceDeltas(
           )
         }
       } else {
-        await tx.resourceWallet.update({
-          where: { playerId },
-          data: { [field]: entry.balanceAfter } as Prisma.ResourceWalletUpdateInput,
-        })
+        // Compare-and-set credit: the DB-level guarantee that concurrent
+        // credits/debits interleave correctly (see persistWalletCredit).
+        await persistWalletCredit(tx, playerId, entry, field)
       }
     } else {
       // GEMS — premium currency on Player.
@@ -353,12 +462,13 @@ export async function applyResourceDeltas(
           )
         }
       } else {
-        await tx.player.update({
-          where: { id: playerId },
-          data: { gems: entry.balanceAfter },
-        })
+        await persistGemsCredit(tx, playerId, entry)
       }
     }
+
+    // The CAS loop may have discovered a fresh full-cap (concurrent credit
+    // won the race) — an honest skip writes NO balance and NO ledger row.
+    if (entry.skipped) continue
 
     ledgerRows.push({
       playerId,
@@ -497,19 +607,27 @@ export async function grantResources(
   const requestHash = grantRequestHash(playerId, amounts, meta)
 
   // 1) Replay fast-path — the key exists → this grant already committed.
+  //    SECURITY: the documented TTL is honored — an EXPIRED key is deleted
+  //    (inside the same tx) and the grant re-executes; a key that never
+  //    expires would be an unbounded-growth vector, and pruning without the
+  //    fast-path check would make behavior depend on when the pruner ran.
   const existing = await tx.idempotencyKey.findUnique({ where: { key: idempotencyKey } })
   if (existing) {
-    if (existing.action !== GRANT_ACTION || existing.requestHash !== requestHash) {
-      throw new AppError(
-        'IDEMPOTENT_REPLAY',
-        'Idempotency key was already used for a different grant',
-      )
+    if (existing.expiresAt.getTime() <= Date.now()) {
+      await tx.idempotencyKey.delete({ where: { key: idempotencyKey } })
+    } else {
+      if (existing.action !== GRANT_ACTION || existing.requestHash !== requestHash) {
+        throw new AppError(
+          'IDEMPOTENT_REPLAY',
+          'Idempotency key was already used for a different grant',
+        )
+      }
+      if (existing.responseBody === null) {
+        // Unreachable while keys commit with their payout — defensive anyway.
+        throw new AppError('IDEMPOTENT_REPLAY', 'Grant is still in flight — retry shortly')
+      }
+      return { applied: hydrateGrantResult(existing.responseBody), replayed: true }
     }
-    if (existing.responseBody === null) {
-      // Unreachable while keys commit with their payout — defensive anyway.
-      throw new AppError('IDEMPOTENT_REPLAY', 'Grant is still in flight — retry shortly')
-    }
-    return { applied: hydrateGrantResult(existing.responseBody), replayed: true }
   }
 
   // 2) Claim the key inside the payout transaction (unique constraint is the
@@ -579,6 +697,22 @@ export async function runEconomyTransaction<T>(
   return withKeyLock(`wallet:${playerId}`, () =>
     withWriteRetry(() => db.$transaction(run, ECONOMY_TX_OPTIONS)),
   )
+}
+
+// ── Retention (expired idempotency keys — called from the ops tick) ─────────
+
+/**
+ * Deletes grant-idempotency keys past their TTL. Defense against unbounded
+ * table growth: every key commits with its payout, so a key that lived
+ * forever would accumulate one row per faucet grant for the life of the
+ * game. The replay fast-path ALSO honors expiresAt, so behavior is
+ * identical whether or not the pruner has run recently.
+ */
+export async function pruneExpiredIdempotencyKeys(now: Date = new Date()): Promise<number> {
+  const deleted = await db.idempotencyKey.deleteMany({
+    where: { expiresAt: { lte: now } },
+  })
+  return deleted.count
 }
 
 // ── Admin adjustment (audited — reason: ADMIN_ADJUSTMENT) ────────────────────

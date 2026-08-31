@@ -13,7 +13,6 @@ import { getEnv } from '@/config/env'
 import { buildSessionCookie, requireAdminScope, resolveAuthConfig } from '@/lib/auth'
 import { createEvent, listEvents, resolvePaging } from '@/lib/game/services/admin'
 import { clientIp } from '@/lib/api/request-info'
-
 const EVENT_TYPES = [
   'GOLD_RUSH',
   'BANDIT_ATTACK',
@@ -30,6 +29,18 @@ const listQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
 })
 
+/**
+ * Event config is admin-supplied but persisted verbatim — bounded: keys ≤64
+ * chars and the whole serialized blob ≤8 KiB (a deep/oversized record would
+ * otherwise bloat rows and downstream renders with no ceiling).
+ */
+const boundedConfig = z
+  .record(z.string().max(64), z.unknown())
+  .optional()
+  .refine((v) => v === undefined || JSON.stringify(v).length <= 8192, {
+    message: 'config must serialize to at most 8192 chars',
+  })
+
 const createBody = z.object({
   type: z.enum(EVENT_TYPES),
   title: z.string().min(4).max(120).optional(),
@@ -40,7 +51,7 @@ const createBody = z.object({
   endsAt: z.coerce.date().refine((d) => d.getTime() > Date.now(), {
     message: 'endsAt must be in the future',
   }),
-  config: z.record(z.string(), z.unknown()).optional(),
+  config: boundedConfig,
 })
 
 export const GET = defineRoute({ query: listQuery }, async ({ request, query }) => {
@@ -70,6 +81,7 @@ export const POST = defineRoute({ body: createBody }, async ({ request, body }) 
   const { refreshed, adminUserId } = await requireAdminScope(request, 'events.manage', {
     refresh: true,
     config: cfg,
+    rateLimit: 'adminWrite',
   })
 
   const created = await createEvent({

@@ -24,6 +24,7 @@ export const POST = defineRoute(
     const { refreshed, adminUserId } = await requireAdminScope(request, 'announcements.manage', {
       refresh: true,
       config: cfg,
+      rateLimit: 'adminWrite',
     })
 
     const row = await setAnnouncementActive({

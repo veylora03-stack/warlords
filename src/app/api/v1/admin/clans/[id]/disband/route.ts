@@ -31,6 +31,7 @@ export const POST = defineRoute(
     const { refreshed, adminUserId } = await requireAdminScope(request, 'clans.manage', {
       refresh: true,
       config: cfg,
+      rateLimit: 'adminWrite',
     })
 
     const result = await disbandClan({

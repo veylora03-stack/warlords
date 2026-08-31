@@ -23,7 +23,11 @@ export const POST = defineRoute(
   async ({ request, params }) => {
     const env = getEnv()
     const cfg = resolveAuthConfig(env)
-    const { principal, refreshed } = await requirePlayer(request, { refresh: true, config: cfg })
+    const { principal, refreshed } = await requirePlayer(request, {
+      refresh: true,
+      config: cfg,
+      rateLimit: 'playerWrite',
+    })
 
     const result = await finishBuildingUpgrade(principal.player.id, params.type)
 

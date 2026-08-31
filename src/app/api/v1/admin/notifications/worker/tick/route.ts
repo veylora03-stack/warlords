@@ -20,21 +20,25 @@ import {
   drainNotificationQueue,
   pruneNotificationStorage,
 } from '@/lib/game/services/notification.service'
+import { pruneExpiredIdempotencyKeys } from '@/lib/game/services/economy.service'
+import { enforcePrincipalRateLimit } from '@/lib/rate-limit'
 
 export const POST = defineRoute({}, async ({ request }) => {
   const env = getEnv()
   const cfg = resolveAuthConfig(env)
-  const { refreshed } = await requireAdminScope(request, 'notifications.drain', {
+  const { refreshed, principal } = await requireAdminScope(request, 'notifications.drain', {
     refresh: true,
     config: cfg,
   })
+  enforcePrincipalRateLimit(principal.user.id, 'adminDrain')
 
   const result = await drainNotificationQueue({ workerId: 'admin-tick' })
   const prune = await pruneNotificationStorage()
+  const idempotencyKeysPruned = await pruneExpiredIdempotencyKeys()
 
   const headers: Record<string, string> = {}
   if (refreshed) {
     headers['set-cookie'] = buildSessionCookie(refreshed.token, cfg.sessionTtlSeconds, env.isProd)
   }
-  return ok(request, { ...result, pruned: prune }, { headers })
+  return ok(request, { ...result, pruned: prune, idempotencyKeysPruned }, { headers })
 })

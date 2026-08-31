@@ -598,7 +598,7 @@ describe('POST /api/v1/army/train/[id]/complete (claim lifecycle)', () => {
     expect(queued).not.toBeNull()
     expect(queued!.status).toBe('PENDING')
 
-    await drainNotificationQueue({ workerId: 'army-test' })
+    await drainNotificationQueue({ workerId: 'army-test', telegramConfig: { token: null } })
 
     const notification = await db.notification.findFirst({
       where: { playerId: compPlayerId, type: 'TRAINING_COMPLETE' },

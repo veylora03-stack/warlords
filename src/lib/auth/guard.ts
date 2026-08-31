@@ -18,6 +18,7 @@ import { authenticate } from './session.service'
 import { resolveAuthConfig, type AuthConfig } from './session.config'
 import { AppError } from '@/lib/api/errors'
 import { db } from '@/lib/db'
+import { enforcePrincipalRateLimit, type RateLimitGroupName } from '@/lib/rate-limit'
 import { adminRoleHasScope, adminScopesForRole, type AdminScope } from '@/lib/game/config/admin'
 import type { AuthPrincipal, RefreshedSession } from './session.types'
 
@@ -41,6 +42,14 @@ export interface RequireAuthOptions {
   refresh?: boolean
   /** Test seam — inject a resolved config instead of reading env. */
   config?: AuthConfig
+  /**
+   * Per-identity throttle group (Phase 23 hardening). Applied on EVERY
+   * authenticated request against the DB-resolved user id — an identity a
+   * client cannot forge. Routes may pass a tighter group for expensive or
+   * destructive operations; the default is a generous abuse backstop.
+   * Pass `null` to opt out (test seams only).
+   */
+  rateLimit?: RateLimitGroupName | null
 }
 
 export interface RequireAuthResult {
@@ -53,7 +62,15 @@ export async function requireAuth(
   options: RequireAuthOptions = {},
 ): Promise<RequireAuthResult> {
   const cfg = options.config ?? resolveAuthConfig()
-  return authenticate(request, cfg, { refresh: options.refresh })
+  const result = await authenticate(request, cfg, { refresh: options.refresh })
+
+  // Per-identity abuse backstop — AFTER authentication (the key is the
+  // DB-resolved user id, not any client-supplied value).
+  if (options.rateLimit !== null) {
+    enforcePrincipalRateLimit(result.principal.user.id, options.rateLimit ?? 'standard')
+  }
+
+  return result
 }
 
 export interface RequirePlayerResult {

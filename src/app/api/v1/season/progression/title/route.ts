@@ -20,7 +20,11 @@ const equipBody = z.object({
 export const POST = defineRoute({ body: equipBody }, async ({ request, body }) => {
   const env = getEnv()
   const cfg = resolveAuthConfig(env)
-  const { principal, refreshed } = await requirePlayer(request, { refresh: true, config: cfg })
+  const { principal, refreshed } = await requirePlayer(request, {
+    refresh: true,
+    config: cfg,
+    rateLimit: 'playerWrite',
+  })
 
   const result = await equipTitle(principal.player.id, body.titleId)
 

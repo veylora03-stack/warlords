@@ -24,6 +24,7 @@ export const POST = defineRoute(
     const { refreshed, adminUserId } = await requireAdminScope(request, 'players.unban', {
       refresh: true,
       config: cfg,
+      rateLimit: 'adminWrite',
     })
 
     const result = await unbanPlayer({
