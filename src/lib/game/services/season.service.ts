@@ -199,7 +199,7 @@ export async function awardSeasonPointsInTx(
   tx: Tx,
   playerId: string,
   points: number,
-  source: 'BUILDING_LEVEL_UP' | 'UNIT_TRAINED',
+  source: 'BUILDING_LEVEL_UP' | 'UNIT_TRAINED' | 'BATTLE_VICTORY',
   sourceMeta: Record<string, number | string>,
 ): Promise<number> {
   if (!Number.isInteger(points) || points <= 0) return 0

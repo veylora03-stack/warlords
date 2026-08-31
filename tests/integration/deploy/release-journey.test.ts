@@ -1,10 +1,11 @@
 /**
- * Integration tests — PHASE 27 RELEASE ACCEPTANCE: the critical user journey.
+ * Integration tests — RELEASE ACCEPTANCE: the critical user journey.
  *
  * Telegram → /start (bot webhook) → PLAY (web_app button) → Mini App →
  * Authentication → Create Player → City → Collect Resources → Upgrade
- * Building → Train Army → [Attack Player → Battle Result → Reward:
- * battle engine pending its phase — evidence is recorded, never faked] →
+ * Building → Train Army → Attack Player (REAL route: the Phase 28 battle
+ * engine answers with its typed protection rail; the full combat journey
+ * lives in tests/integration/battle + tests/e2e/battle-journey) →
  * Ranking → Notifications → read state.
  *
  * Every step is the REAL stack: real initData HMAC exchange, real bootstrap
@@ -17,7 +18,6 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { db } from '../../../src/lib/db'
 import { STARTER_WALLET } from '../../../src/lib/game/config/starter'
 import { POST as telegramPost } from '../../../src/app/api/v1/auth/telegram/route'
@@ -28,6 +28,9 @@ import { POST as finishPost } from '../../../src/app/api/v1/city/buildings/[type
 import { GET as armyGet } from '../../../src/app/api/v1/army/route'
 import { POST as trainPost } from '../../../src/app/api/v1/army/train/route'
 import { POST as trainCompletePost } from '../../../src/app/api/v1/army/train/[id]/complete/route'
+import { POST as attackPost } from '../../../src/app/api/v1/battles/attack/route'
+import { GET as targetsGet } from '../../../src/app/api/v1/battles/targets/route'
+import { GET as historyGet } from '../../../src/app/api/v1/battles/route'
 import { GET as resourcesGet } from '../../../src/app/api/v1/player/resources/route'
 import { GET as transactionsGet } from '../../../src/app/api/v1/player/transactions/route'
 import { GET as seasonGet } from '../../../src/app/api/v1/season/route'
@@ -305,13 +308,54 @@ describe('RELEASE JOURNEY — the exact critical path from the Phase 27 contract
     expect(swordsman?.count).toBe(21)
   }, 90_000)
 
-  it('STEP 8 — attack player / battle result: honestly UNAVAILABLE (engine pending), evidence recorded', () => {
-    // The battle engine has not shipped (roadmap Phase 8): no player-facing
-    // battle route exists. A release must SAY so, not fake a battle.
-    expect(existsSync('src/app/api/v1/battles')).toBe(false)
-    expect(existsSync('src/app/api/v1/army/attack')).toBe(false)
-    // Admin battle inspection exists for the data the engine will produce.
-    expect(existsSync('src/app/api/v1/admin/battles')).toBe(true)
+  it('STEP 8 — attack player: the REAL battle route answers with its protection rail', async () => {
+    // The Phase 28 battle engine is LIVE. The journey player attacks a
+    // freshly-created second player: the server-authoritative protection
+    // rules honestly refuse the raid (PROTECTED_TARGET 403) — a real route
+    // round-trip that mutates NO progression, so the journey's exact season
+    // arithmetic below stays intact. The complete combat journey
+    // (attack → combat → casualties → rewards → ranking → notifications →
+    // history) is verified end-to-end by tests/e2e/battle-journey.test.ts.
+    const targetTgId = '9100027702'
+    const targetRes = await telegramPost(
+      new Request('http://localhost:3000/api/v1/auth/telegram', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': nextIp() },
+        body: JSON.stringify({ initData: buildInitData(targetTgId) }),
+      }),
+    )
+    expect(targetRes.status).toBe(200)
+    const targetBody = await parse(targetRes)
+    expect(targetBody.ok).toBe(true)
+    if (!targetBody.ok) return
+    const targetToken = targetBody.data.token as string
+    const targetPlayerId = (targetBody.data.player as { id: string }).id
+
+    const attackRes = await attackPost(
+      request('/api/v1/battles/attack', 'POST', { targetPlayerId }),
+    )
+    expect(attackRes.status).toBe(403)
+    const attackBody = await parse(attackRes)
+    expect(attackBody.ok).toBe(false)
+    expect((attackBody.error as { code: string } | undefined)?.code).toBe('PROTECTED_TARGET')
+
+    // The attack surfaces exist for the player and stay participant-scoped:
+    // the target roster lists the fresh world WITHOUT any army payload.
+    const targetsRes = await targetsGet(request('/api/v1/battles/targets'))
+    expect(targetsRes.status).toBe(200)
+    const targetsBody = await parse(targetsRes)
+    expect(targetsBody.ok).toBe(true)
+    expect(JSON.stringify(targetsBody.data)).not.toContain('unitTypeId')
+
+    // The target's own history endpoint is live and empty.
+    const historyRes = await historyGet(
+      new Request('http://localhost:3000/api/v1/battles', {
+        headers: { authorization: `Bearer ${targetToken}`, 'x-forwarded-for': nextIp() },
+      }),
+    )
+    expect(historyRes.status).toBe(200)
+    const historyBody = await parse(historyRes)
+    expect((historyBody.data as { total: number }).total).toBe(0)
   })
 
   it('STEP 9 — ranking: the journey points place the player in the live season standing', async () => {

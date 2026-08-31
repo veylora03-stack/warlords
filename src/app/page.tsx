@@ -51,6 +51,14 @@ import {
   type SeasonRewardPayout,
 } from '@/features/season'
 import { useUiStore } from '@/stores/ui.store'
+import {
+  useAttackMutation,
+  useBattleHistoryQuery,
+  useBattleTargetsQuery,
+  useBattleDetailQuery,
+  type AttackResultView,
+  type AttackTargetRow,
+} from '@/features/battle'
 
 type PhaseState = 'done' | 'next' | 'planned'
 
@@ -133,7 +141,11 @@ const PHASES: PhaseRow[] = [
     name: 'Final Production QA (589 tests · release journey E2E · live browser verification · honest release report)',
     state: 'done',
   },
-  { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
+  {
+    id: '28',
+    name: 'Battle Engine (deterministic sim · attack → combat → casualties → rewards → ranking → notifications → history)',
+    state: 'done',
+  },
   { id: '—', name: 'Territory, Quests & World', state: 'planned' },
   {
     id: '—',
@@ -151,33 +163,33 @@ const PHASES: PhaseRow[] = [
 const DELIVERABLES = [
   {
     label:
-      'Release verdict — CONDITIONALLY READY: infrastructure release-grade (589 tests · build · smoke), battle/quests/market/clan content honestly gated pending their phases',
-    file: 'docs/PHASE27-FINAL-PRODUCTION-REPORT.md',
+      'Deterministic seeded simulator — same (seed, config, armies) ⇒ identical outcome; replayable, auditable, DB-mutation-free pure engine',
+    file: 'src/lib/game/engine/battle/simulator.ts',
   },
   {
     label:
-      'Critical journey verified E2E — bot /start → PLAY → initData auth → bootstrap → city → resources → REAL 12s build → REAL 22s train → ranking 22 pts → notifications',
-    file: 'tests/integration/deploy/release-journey.test.ts (8/8)',
+      'Full attack pipeline — validate → lock → energy CAS → simulate → casualties → ledger loot → honor/XP/season → stats → power → logs → notifications, ONE transaction',
+    file: 'src/lib/game/services/battle.service.ts',
   },
   {
     label:
-      'Live browser verification — UI upgrade → typed queue gate → FINISH claim → season points → notification bell → mark-read → mobile 390px, zero console errors',
-    file: 'Agent-Browser session record (Phase 27)',
+      'Data-driven balance — versioned config snapshotted onto every battle; counters from the unit catalog (2500 bps edges); wall/hospital extension points',
+    file: 'src/lib/game/config/battle.ts',
   },
   {
     label:
-      'All 27 areas audited — 10 systems production-ready with evidence · 12 model/catalog-only (honest N/A) · security/perf/deploy status in the report',
-    file: 'docs/PHASE27-FINAL-PRODUCTION-REPORT.md §2',
+      'Security matrix — self/nonexistent/protected targets, cooldown, energy, idempotency replay, concurrent double-submit, negative-unit invariants (integration + unit + E2E)',
+    file: 'tests/integration/battle/battle-system.test.ts',
   },
   {
     label:
-      'Bug register — zero critical, zero medium open; 3 low items resolved/documented (env template tracking · display-ghost correction · test-infra drain race)',
-    file: 'docs/PHASE27-FINAL-PRODUCTION-REPORT.md §4',
+      'Mini App attack flow — target roster (armies hidden) → confirmation (cost/cooldown/risk) → result (VICTORY/DEFEAT) → history → round-by-round detail',
+    file: 'src/features/battle · src/app/page.tsx',
   },
   {
     label:
-      'Phase 26 deployment artifacts (probes · Docker · PG baseline · bot setup · guide) unchanged and re-verified by the full regression matrix',
-    file: 'DEPLOYMENT.md · Dockerfile · prisma/postgres/',
+      'Complete journey verified — ATTACK → COMBAT → CASUALTIES → REWARDS → RANKING → NOTIFICATION → HISTORY (E2E, real DB state)',
+    file: 'docs/BATTLE-ENGINE.md',
   },
 ]
 
@@ -505,6 +517,131 @@ function ArmyUnitRow({ unit, catalog }: ArmyUnitRowProps) {
   )
 }
 
+const PROTECTION_LABELS: Record<string, string> = {
+  NEWBIE_SHIELD: 'newbie shield',
+  INACTIVE_SHIELD: 'inactive',
+  LEVEL_GAP: 'level gap',
+  REPEATED_RAIDS: 'raid limit',
+}
+
+const LOOT_SHORT: Record<string, string> = {
+  GOLD: 'Au',
+  WOOD: 'Wd',
+  IRON: 'Ir',
+  FOOD: 'Fd',
+  CRYSTAL: 'Cr',
+}
+
+function lootText(loot: Record<string, string> | null): string {
+  if (!loot) return '—'
+  const parts = Object.entries(loot)
+    .filter(([, amount]) => Number(amount) > 0)
+    .map(([resource, amount]) => `${LOOT_SHORT[resource] ?? resource} ${formatAmount(amount)}`)
+  return parts.length > 0 ? parts.join(' · ') : 'nothing carried'
+}
+
+function TargetRow({
+  target,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  target: AttackTargetRow
+  selected: boolean
+  disabled: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={`w-full rounded border px-2.5 py-2 text-left transition-colors ${
+        selected
+          ? 'border-amber-500/60 bg-amber-500/10'
+          : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-600'
+      } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+    >
+      <span className="flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-semibold text-zinc-200">
+          {target.name} <span className="text-[10px] text-zinc-500">lv{target.level}</span>
+        </span>
+        {target.attackable ? (
+          <span className="shrink-0 text-[10px] text-zinc-500">
+            power <span className="text-amber-400">{formatAmount(target.power)}</span>
+          </span>
+        ) : (
+          <Badge className="shrink-0 border border-zinc-700 bg-zinc-900 px-1.5 py-0 text-[10px] text-zinc-400">
+            {target.blockedBy.map((r) => PROTECTION_LABELS[r] ?? r).join(' · ')}
+          </Badge>
+        )}
+      </span>
+    </button>
+  )
+}
+
+function BattleResultPanel({ result }: { result: AttackResultView }) {
+  const victory = result.outcome === 'VICTORY'
+  const draw = result.outcome === 'DRAW'
+  return (
+    <div
+      className={`rounded border px-3 py-3 ${
+        victory
+          ? 'border-emerald-500/40 bg-emerald-500/5'
+          : draw
+            ? 'border-zinc-700 bg-zinc-900/60'
+            : 'border-red-500/40 bg-red-500/5'
+      }`}
+      aria-live="polite"
+    >
+      <div className="flex items-center justify-between">
+        <span
+          className={`text-lg font-black ${victory ? 'text-emerald-400' : draw ? 'text-zinc-300' : 'text-red-400'}`}
+        >
+          {victory ? '🏆 VICTORY' : draw ? '⚖️ DRAW' : '☠️ DEFEAT'}
+        </span>
+        <span className="text-[10px] text-zinc-500">
+          {result.roundsCount} round{result.roundsCount === 1 ? '' : 's'}
+          {result.unguardedCity ? ' · unguarded city' : ''} · seed {result.seed}
+        </span>
+      </div>
+      <div className="mt-2 grid gap-x-4 gap-y-1 font-mono text-[11px] text-zinc-400 sm:grid-cols-2">
+        <span>
+          vs <span className="text-zinc-200">{result.opponent.name}</span> (lv
+          {result.opponent.level})
+        </span>
+        <span>
+          loot <span className="text-amber-400">{lootText(result.loot)}</span>
+        </span>
+        <span>
+          your losses{' '}
+          <span className="text-red-400">
+            {result.casualties.attacker.reduce((s, r) => s + r.count, 0).toLocaleString('en-US')}
+          </span>{' '}
+          · enemy losses{' '}
+          <span className="text-emerald-400">
+            {result.casualties.defender.reduce((s, r) => s + r.count, 0).toLocaleString('en-US')}
+          </span>
+        </span>
+        <span>
+          honor <span className="text-amber-400">+{result.honor.attackerDelta}</span> · xp{' '}
+          <span className="text-amber-400">+{result.xp.attackerGained}</span>
+          {result.xp.attackerLevelsGained > 0
+            ? ` · level ${result.xp.attackerLevel} (▲${result.xp.attackerLevelsGained})`
+            : ''}
+          {result.seasonPointsAwarded > 0 ? ` · season +${result.seasonPointsAwarded}` : ''}
+        </span>
+      </div>
+      <div className="mt-1.5 font-mono text-[10px] text-zinc-500">
+        {result.casualties.attacker.map((row) => `${row.count}× ${row.unitName}`).join(', ') ||
+          'no casualties'}
+        {' · '}energy −{result.energySpent}
+      </div>
+    </div>
+  )
+}
+
 export default function WarlordsConsole() {
   const autoRefresh = useUiStore((s) => s.autoRefresh)
   const toggleAutoRefresh = useUiStore((s) => s.toggleAutoRefresh)
@@ -535,6 +672,17 @@ export default function WarlordsConsole() {
   const cancelTraining = useCancelTrainingMutation()
   const claimSeasonReward = useClaimSeasonRewardMutation()
   const equipTitle = useEquipTitleMutation()
+  const attackTarget = useAttackMutation()
+
+  // ── Battle console state (Phase 28) ─────────────────────────────────
+  const { data: battleTargets } = useBattleTargetsQuery({ enabled: signedIn })
+  const { data: battleHistory } = useBattleHistoryQuery({ enabled: signedIn })
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
+  const [confirmingAttack, setConfirmingAttack] = useState(false)
+  const [lastBattle, setLastBattle] = useState<AttackResultView | null>(null)
+  const [inspectBattleId, setInspectBattleId] = useState<string | null>(null)
+  const battleDetail = useBattleDetailQuery(inspectBattleId)
+  const selectedTarget = battleTargets?.targets.find((t) => t.playerId === selectedTargetId) ?? null
 
   // Recruitment form state — the server owns the real quantity ceiling; the
   // input is clamped defensively to a sane positive range before submit.
@@ -562,7 +710,8 @@ export default function WarlordsConsole() {
     completeTraining.isPending ||
     cancelTraining.isPending ||
     claimSeasonReward.isPending ||
-    equipTitle.isPending
+    equipTitle.isPending ||
+    attackTarget.isPending
   const mutationError =
     upgradeBuilding.error ??
     finishBuilding.error ??
@@ -570,7 +719,8 @@ export default function WarlordsConsole() {
     completeTraining.error ??
     cancelTraining.error ??
     claimSeasonReward.error ??
-    equipTitle.error
+    equipTitle.error ??
+    attackTarget.error
   const mutationErrorDetail = (
     mutationError as (Error & { details?: { missing?: string[] } }) | null
   )?.details?.missing
@@ -602,7 +752,7 @@ export default function WarlordsConsole() {
               <div className="flex items-center gap-2">
                 <NotificationBell enabled={signedIn} />
                 <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                  PHASE 27 COMPLETE
+                  PHASE 28 COMPLETE
                 </Badge>
               </div>
               <span className="font-mono text-xs text-zinc-500">
@@ -1558,6 +1708,308 @@ export default function WarlordsConsole() {
             </CardContent>
           </Card>
 
+          {/* Battle Engine — live from /api/v1/battles/* (Phase 28) */}
+          <Card className="border-zinc-800 bg-zinc-900/60 md:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center justify-between text-base font-bold text-zinc-100">
+                Battle Engine
+                <span
+                  className={`inline-flex items-center gap-2 text-xs font-semibold ${
+                    battleTargets ? 'text-emerald-400' : 'text-zinc-500'
+                  }`}
+                  aria-live="polite"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      battleTargets ? 'bg-emerald-400' : 'bg-zinc-600'
+                    }`}
+                  />
+                  {battleTargets
+                    ? `${battleTargets.attacker.armyUnits} UNITS READY`
+                    : signedIn
+                      ? 'NO ARMY DATA'
+                      : 'SIGN IN TO VIEW'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 font-mono text-xs text-zinc-400">
+              {battleTargets ? (
+                <>
+                  {/* Attack readiness strip */}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span>
+                      energy{' '}
+                      <span className="text-amber-400">
+                        {battleTargets.attacker.energy}/{battleTargets.attacker.energyMax}
+                      </span>
+                    </span>
+                    <span>
+                      attack cost{' '}
+                      <span className="text-zinc-300">{battleTargets.attacker.attackCost}</span>
+                    </span>
+                    <span>
+                      cooldown{' '}
+                      {battleTargets.attacker.cooldownRemainingSec > 0 ? (
+                        <span className="text-red-400">
+                          {battleTargets.attacker.cooldownRemainingSec}s
+                        </span>
+                      ) : (
+                        <span className="text-emerald-400">clear</span>
+                      )}
+                    </span>
+                  </div>
+
+                  <Separator className="bg-zinc-800" />
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {/* Target roster */}
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                        Targets (armies hidden until battle)
+                      </p>
+                      <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                        {battleTargets.targets.length > 0 ? (
+                          battleTargets.targets.map((target) => (
+                            <TargetRow
+                              key={target.playerId}
+                              target={target}
+                              selected={target.playerId === selectedTargetId}
+                              disabled={target.attackable !== true}
+                              onSelect={() => {
+                                setSelectedTargetId(target.playerId)
+                                setConfirmingAttack(false)
+                                setLastBattle(null)
+                              }}
+                            />
+                          ))
+                        ) : (
+                          <p className="text-zinc-500">No other players in the world yet.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Confirmation / result */}
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                        {lastBattle ? 'Battle result' : 'Attack order'}
+                      </p>
+                      {lastBattle ? (
+                        <BattleResultPanel result={lastBattle} />
+                      ) : selectedTarget ? (
+                        <div className="space-y-2 rounded border border-zinc-800 bg-zinc-950/60 px-3 py-3">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-zinc-200">
+                              {profile?.name ?? 'Your army'}
+                            </span>
+                            <span className="text-[10px] text-zinc-600">vs</span>
+                            <span className="font-semibold text-zinc-200">
+                              {selectedTarget.name}{' '}
+                              <span className="text-[10px] text-zinc-500">
+                                lv{selectedTarget.level}
+                              </span>
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
+                            <span>
+                              your power{' '}
+                              <span className="text-amber-400">
+                                {profile ? formatAmount(profile.power.toString()) : '—'}
+                              </span>
+                            </span>
+                            <span>
+                              target power{' '}
+                              <span className="text-amber-400">
+                                {formatAmount(selectedTarget.power)}
+                              </span>
+                            </span>
+                            <span>
+                              energy cost{' '}
+                              <span
+                                className={
+                                  battleTargets.attacker.energy >= battleTargets.attacker.attackCost
+                                    ? 'text-emerald-400'
+                                    : 'text-red-400'
+                                }
+                              >
+                                −{battleTargets.attacker.attackCost}
+                              </span>
+                            </span>
+                            <span>
+                              risk{' '}
+                              <span className="text-zinc-300">
+                                {Number(selectedTarget.power) > Number(profile?.power ?? 0)
+                                  ? 'dangerous'
+                                  : 'favorable'}
+                              </span>
+                            </span>
+                          </div>
+                          <p className="text-[10px] leading-relaxed text-zinc-500">
+                            Casualties are permanent. The server decides everything — you only
+                            choose the target.
+                          </p>
+                          {confirmingAttack ? (
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                className="h-8 flex-1 bg-red-600 text-[11px] font-bold text-zinc-950 hover:bg-red-500"
+                                disabled={
+                                  attackTarget.isPending ||
+                                  !selectedTarget.attackable ||
+                                  battleTargets.attacker.energy <
+                                    battleTargets.attacker.attackCost ||
+                                  battleTargets.attacker.cooldownRemainingSec > 0 ||
+                                  battleTargets.attacker.armyUnits === 0
+                                }
+                                onClick={() =>
+                                  attackTarget.mutate(
+                                    { targetPlayerId: selectedTarget.playerId },
+                                    {
+                                      onSuccess: (result) => {
+                                        setLastBattle(result)
+                                        setConfirmingAttack(false)
+                                      },
+                                    },
+                                  )
+                                }
+                              >
+                                {attackTarget.isPending ? 'FIGHTING…' : '⚔ CONFIRM ATTACK'}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 border-zinc-700 px-3 text-[11px] text-zinc-400"
+                                disabled={attackTarget.isPending}
+                                onClick={() => setConfirmingAttack(false)}
+                              >
+                                CANCEL
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="h-8 w-full bg-amber-500 text-[11px] font-black text-zinc-950 hover:bg-amber-400"
+                              disabled={
+                                !selectedTarget.attackable ||
+                                battleTargets.attacker.energy < battleTargets.attacker.attackCost ||
+                                battleTargets.attacker.cooldownRemainingSec > 0 ||
+                                battleTargets.attacker.armyUnits === 0
+                              }
+                              onClick={() => setConfirmingAttack(true)}
+                            >
+                              ATTACK {selectedTarget.name.toUpperCase()}
+                            </Button>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-zinc-500">Select a target to plan an attack.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <Separator className="bg-zinc-800" />
+
+                  {/* Battle history */}
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                      Battle history ({battleHistory?.total ?? 0})
+                    </p>
+                    <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                      {battleHistory && battleHistory.battles.length > 0 ? (
+                        battleHistory.battles.map((row) => (
+                          <div
+                            key={row.battleId}
+                            className="rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2"
+                          >
+                            <div className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="min-w-0 truncate">
+                                <Badge
+                                  className={`mr-1.5 px-1.5 py-0 text-[10px] ${
+                                    row.outcome === 'VICTORY'
+                                      ? 'border border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                                      : row.outcome === 'DRAW'
+                                        ? 'border border-zinc-700 bg-zinc-900 text-zinc-300'
+                                        : 'border border-red-500/40 bg-red-500/15 text-red-300'
+                                  }`}
+                                >
+                                  {row.outcome}
+                                </Badge>
+                                <span className="text-zinc-400">
+                                  {row.myRole === 'ATTACKER' ? 'attacked' : 'defended against'}{' '}
+                                  <span className="text-zinc-200">{row.opponent.name ?? '—'}</span>
+                                </span>
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 shrink-0 px-2 text-[10px] text-amber-400 hover:bg-amber-500/10"
+                                onClick={() =>
+                                  setInspectBattleId(
+                                    inspectBattleId === row.battleId ? null : row.battleId,
+                                  )
+                                }
+                                aria-expanded={inspectBattleId === row.battleId}
+                              >
+                                {inspectBattleId === row.battleId ? 'HIDE' : 'REPORT'}
+                              </Button>
+                            </div>
+                            <div className="mt-0.5 text-[10px] text-zinc-600">
+                              {formatTime(row.startedAt)} · {row.roundsCount} rounds ·{' '}
+                              {lootText(row.loot)} · honor{' '}
+                              {row.honorDelta > 0 ? `+${row.honorDelta}` : row.honorDelta}
+                            </div>
+                            {inspectBattleId === row.battleId && battleDetail.data ? (
+                              <div className="mt-1.5 space-y-1 border-t border-zinc-800 pt-1.5 text-[10px] text-zinc-500">
+                                {battleDetail.data.rounds.length === 0 ? (
+                                  <p>Unguarded city — the battle ended before it began.</p>
+                                ) : (
+                                  battleDetail.data.rounds.map((round, index) => (
+                                    <p key={`${round.roundNumber}-${round.side}-${index}`}>
+                                      R{round.roundNumber} {round.side}: dealt{' '}
+                                      <span className="text-zinc-300">
+                                        {formatAmount(round.damageDealt)}
+                                      </span>{' '}
+                                      dmg
+                                      {round.unitsLost.length > 0
+                                        ? ` · lost ${round.unitsLost
+                                            .map((l) => `${l.count}× ${l.unitTypeId}`)
+                                            .join(', ')}`
+                                        : ''}
+                                    </p>
+                                  ))
+                                )}
+                                <p className="text-zinc-600">
+                                  seed {battleDetail.data.seed} · config v
+                                  {battleDetail.data.configVersion} · deterministic replay
+                                </p>
+                              </div>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-zinc-500">No battles yet — pick a target above.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    Server-authoritative combat: a seeded PRNG (crypto seed, snapshotted config
+                    version) drives every swing — same seed + same armies ⇒ identical battle, so
+                    every report is replayable and auditable. Loot crosses the ledger (
+                    <span className="text-amber-400">BATTLE_REWARD</span>), defeats never destroy
+                    progression, and protection rules (newbie · inactive · level gap · raid limit ·
+                    cooldown) are enforced before the first sword swings.
+                  </p>
+                </>
+              ) : (
+                <p className="leading-relaxed text-zinc-500">
+                  {signedIn
+                    ? 'Signed in but no battle projection available.'
+                    : 'Anonymous — sign in to review targets, attack, and read battle reports.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -1652,7 +2104,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 27 — Final Production QA Verdict
+              Phase 28 — Battle Engine Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -1684,7 +2136,7 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>WARLORDS Dev Console · Phase 27 · release report issued</span>
+          <span>WARLORDS Dev Console · Phase 28 · battle engine live</span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

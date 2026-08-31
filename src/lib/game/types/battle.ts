@@ -68,6 +68,7 @@ export interface BattleUnitStack {
   speed: number
   strongAgainst: Record<string, number> // unitTypeId → bonusBps (from config snapshot)
   weakAgainst: Record<string, number> // unitTypeId → penaltyBps
+  carryCapacity: number
 }
 
 export interface BattleSide {
@@ -81,24 +82,26 @@ export interface BattleSide {
 
 // ── Config snapshot (versioned, persisted with each battle) ─────────────────
 
+/**
+ * Config snapshot (versioned, persisted with each battle in the replay
+ * payload / battle log content) — mirrors src/lib/game/config/battle.ts.
+ */
 export interface BattleConfig {
   version: number
   maxRounds: number
   varianceBps: number // ± damage spread
   classInitiative: UnitClass[]
-  counters: { strongBps: number; weakBps: number }
-  loot: {
-    defenderLootableBps: number
-    carryPerCavalry: number
-    carryPerInfantry: number
-    carryPerSiege: number
-  }
+  defenseDivisorBase: number
+  counters: { maxStrongBps: number; maxWeakBps: number }
+  loot: { defenderLootableBps: number; minCarryToLoot: number }
   casualties: { defenderHospitalBps: number; attackerDeathBps: number }
   energy: { attackCost: number; scoutCost: number }
   protection: {
     newbieLevelCap: number
     newbieAgeHours: number
-    revengeHours: number
+    maxLevelGap: number
+    inactiveProtectDays: number
+    maxAttacksPerTargetPerDay: number
     attackCooldownSec: number
   }
   terrainAttackBps: Record<TerrainType, number>
@@ -126,7 +129,10 @@ export interface BattleRoundRecord {
 
 // ── Result ───────────────────────────────────────────────────────────────────
 
-export type LootAmounts = Partial<Record<'GOLD' | 'WOOD' | 'IRON' | 'FOOD' | 'CRYSTAL', number>>
+/** Resources loot can be drawn from (wallet five — GEMS are never plundered). */
+export type LootResource = 'GOLD' | 'WOOD' | 'IRON' | 'FOOD' | 'CRYSTAL'
+
+export type LootAmounts = Partial<Record<LootResource, bigint>>
 
 export interface BattleSimulationResult {
   result: BattleResult
