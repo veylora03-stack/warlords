@@ -42,6 +42,17 @@ export const POST = defineRoute({ body: executeBody }, async ({ request, body })
   // Belt-and-braces: the operator must confirm WHICH season is being reset.
   const latest = await db.season.findFirst({ orderBy: { number: 'desc' } })
   if (!latest || latest.number !== body.seasonNumber) {
+    // Truthful typed error for the most likely operator mistake: re-running
+    // a settle that already completed. The requested season may be older
+    // than the latest (settled) one — report SEASON_ALREADY_SETTLED for it
+    // instead of the misleading "does not match the current season".
+    const requested = await db.season.findUnique({
+      where: { number: body.seasonNumber },
+      select: { settledAt: true },
+    })
+    if (requested?.settledAt) {
+      throw new AppError('SEASON_ALREADY_SETTLED', 'This season has already been settled')
+    }
     throw new AppError('SETTLEMENT_NOT_PENDING', 'seasonNumber does not match the current season', {
       expected: latest?.number ?? null,
       received: body.seasonNumber,
