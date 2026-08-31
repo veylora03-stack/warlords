@@ -23,7 +23,7 @@
  */
 
 import { Prisma } from '@prisma/client'
-import { db } from '@/lib/db'
+import { dbWrite } from '@/lib/db'
 import { logger } from '@/lib/logger'
 import { bootstrapPlayer, type Tx } from './player-bootstrap.service'
 import { findFreeCityCoordinate } from './city-site.service'
@@ -189,6 +189,6 @@ export async function ensurePlayer(tx: Tx, input: EnsurePlayerInput): Promise<En
  */
 export async function runRegistrationTransaction<T>(run: (tx: Tx) => Promise<T>): Promise<T> {
   return withRegistrationLock(() =>
-    withWriteRetry(() => db.$transaction(run, REGISTRATION_TX_OPTIONS), isUniqueConstraintError),
+    withWriteRetry(() => dbWrite.$transaction(run, REGISTRATION_TX_OPTIONS), isUniqueConstraintError),
   )
 }

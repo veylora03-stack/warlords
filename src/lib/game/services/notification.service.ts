@@ -41,7 +41,7 @@
 
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { logger } from '@/lib/logger'
 import type { Tx } from '@/lib/game/services/player-bootstrap.service'
 import { isUniqueConstraintError } from '@/lib/game/services/prisma-errors'
@@ -318,7 +318,7 @@ async function ensureInboxDelivered(
   claim: ClaimIdentity,
 ): Promise<InboxDeliveryResult> {
   try {
-    const inboxId = await db.$transaction(async (tx) => {
+    const inboxId = await dbWrite.$transaction(async (tx) => {
       // Re-read the backlink INSIDE the tx — our row snapshot may be stale.
       const current = await tx.notificationQueue.findUnique({
         where: { id: row.id },

@@ -8,7 +8,7 @@
  * (count===1) so concurrent operators converge without double-finishes.
  */
 
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { ADMIN_PANEL_POLICY } from '@/lib/game/config/admin'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
@@ -134,7 +134,7 @@ export async function createEvent(input: CreateEventInput): Promise<AdminEventRo
     throw new AppError('VALIDATION_ERROR', 'PLAYER-scope events require targetPlayerId')
   }
 
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     if (input.targetPlayerId) {
       const target = await tx.player.findUnique({
         where: { id: input.targetPlayerId },
@@ -214,7 +214,7 @@ async function transitionEvent(input: {
   reason?: string
   ip?: string
 }): Promise<AdminEventRow> {
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const existing = await tx.gameEvent.findUnique({
       where: { id: input.eventId },
       include: { targetPlayer: { select: { name: true } } },

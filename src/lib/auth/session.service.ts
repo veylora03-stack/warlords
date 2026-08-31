@@ -20,7 +20,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import { verifyInitData, type TelegramInitDataUser } from '@/lib/telegram'
@@ -118,8 +118,7 @@ async function issueSession(args: IssueSessionArgs): Promise<ExchangeResult> {
   const result = await withRegistrationLock(() =>
     withWriteRetry(
       () =>
-        db
-          .$transaction(async (tx) => {
+        dbWrite.$transaction(async (tx) => {
             // 1) Identity upsert — telegramId is THE identity; username is display-only.
             const user = await tx.user.upsert({
               where: { telegramId: args.telegramId },

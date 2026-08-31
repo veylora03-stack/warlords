@@ -7,7 +7,7 @@
  * announcement cannot be broadcast (ANNOUNCEMENT_INACTIVE).
  */
 
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { ADMIN_PANEL_POLICY } from '@/lib/game/config/admin'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
@@ -102,7 +102,7 @@ export async function createAnnouncement(
     throw new AppError('VALIDATION_ERROR', 'Announcement body must be 4…2000 chars')
   }
 
-  const created = await db.$transaction(async (tx) => {
+  const created = await dbWrite.$transaction(async (tx) => {
     if (input.audience === 'CLAN' && !input.clanId) {
       throw new AppError('VALIDATION_ERROR', 'CLAN audience requires clanId')
     }
@@ -143,7 +143,7 @@ export async function setAnnouncementActive(input: {
   isActive: boolean
   ip?: string
 }): Promise<AdminAnnouncementRow> {
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const existing = await tx.announcement.findUnique({
       where: { id: input.announcementId },
       include: { createdBy: { select: { username: true } } },
@@ -185,7 +185,7 @@ export async function broadcastAnnouncement(input: {
   actorUserId: string
   ip?: string
 }): Promise<BroadcastResult> {
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const announcement = await tx.announcement.findUnique({
       where: { id: input.announcementId },
     })

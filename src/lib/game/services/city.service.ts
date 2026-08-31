@@ -649,8 +649,16 @@ export interface BuildingCatalogView {
  * Full materialized catalog (17 types × per-level cost/duration/requirements/
  * effects) — pure config projection so the client renders exact numbers
  * without authority math. Costs cross as display strings (BigInt policy).
+ *
+ * Phase 25: MEMOIZED. The view is a pure function of static config —
+ * recomputing 17 types × levels of BigInt→string mapping on every request
+ * was pure allocation churn on one of the hottest read paths. The cached
+ * object is treated as immutable (routes only serialize it); a code reload
+ * (config change) rebuilds it with the process.
  */
-export async function getBuildingCatalogView(): Promise<BuildingCatalogView> {
+let buildingCatalogCache: BuildingCatalogView | null = null
+export function getBuildingCatalogView(): BuildingCatalogView {
+  if (buildingCatalogCache) return buildingCatalogCache
   const types = materializeBuildingCatalog().map((entry) => ({
     type: entry.type,
     name: entry.name,
@@ -667,7 +675,8 @@ export async function getBuildingCatalogView(): Promise<BuildingCatalogView> {
       effects: level.effects,
     })),
   }))
-  return { types }
+  buildingCatalogCache = { types }
+  return buildingCatalogCache
 }
 
 // ── Balance helper (shared with the economy view shape) ──────────────────────

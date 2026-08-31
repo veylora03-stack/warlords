@@ -824,8 +824,13 @@ interface ConfigUnitLike {
  * Full materialized unit catalog (roster × stats/cost/time/counters/building
  * gates) — pure config projection so the client renders exact numbers
  * without authority math. Costs cross as display strings (BigInt policy).
+ *
+ * Phase 25: MEMOIZED — pure function of static config, zero staleness risk;
+ * the per-request rebuild was pure allocation churn on a hot read path.
  */
-export async function getArmyCatalogView(): Promise<ArmyCatalogView> {
+let armyCatalogCache: ArmyCatalogView | null = null
+export function getArmyCatalogView(): ArmyCatalogView {
+  if (armyCatalogCache) return armyCatalogCache
   const units = (UNITS as unknown as ConfigUnitLike[]).map((unit) => ({
     id: unit.id,
     name: unit.name,
@@ -848,5 +853,6 @@ export async function getArmyCatalogView(): Promise<ArmyCatalogView> {
     weakAgainst: unit.weakAgainst,
     description: unit.description,
   }))
-  return { units }
+  armyCatalogCache = { units }
+  return armyCatalogCache
 }

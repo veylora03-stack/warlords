@@ -141,6 +141,27 @@ async function main(): Promise<number> {
     seen.add(key)
   }
 
+  // ── V6 (Phase 25): SQLite concurrency posture — WAL journal mode ─────────
+  // WAL is the read/write concurrency backbone of the dev driver (readers
+  // never block the single writer). journal_mode IS persistent on the file,
+  // so enabling here heals any fresh database that was created in DELETE
+  // mode. On PostgreSQL this is a no-op (MVCC is built in).
+  const mode = (await prisma.$queryRawUnsafe(`PRAGMA journal_mode`)) as Array<{
+    journal_mode: string
+  }>
+  const journalMode = mode[0]?.journal_mode
+  if (journalMode !== 'wal') {
+    await prisma.$executeRawUnsafe(`PRAGMA journal_mode=WAL`)
+    const after = (await prisma.$queryRawUnsafe(`PRAGMA journal_mode`)) as Array<{
+      journal_mode: string
+    }>
+    if (after[0]?.journal_mode !== 'wal') {
+      push('V6-wal', `journal_mode is '${journalMode}' and could not be switched to WAL`)
+    } else {
+      console.log('  V6-wal: journal_mode upgraded DELETE → WAL (persistent)')
+    }
+  }
+
   // ── Report ────────────────────────────────────────────────────────────────
   if (violations.length > 0) {
     console.error(`\n✗ DATABASE INVARIANT VIOLATIONS (${violations.length}):\n`)

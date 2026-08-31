@@ -8,7 +8,7 @@
  * next request.
  */
 
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { GRANTABLE_ADMIN_ROLES, type AdminRoleStorageValue } from '@/lib/game/config/admin'
 import { recordAdminAuditInTx, recordAdminAuditView } from './admin-audit.service'
@@ -87,7 +87,7 @@ export async function grantStaff(input: GrantStaffInput): Promise<GrantStaffResu
     throw new AppError('VALIDATION_ERROR', 'telegramId must be a numeric Telegram id')
   }
 
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const user = await tx.user.findUnique({
       where: { telegramId },
       select: {
@@ -161,7 +161,7 @@ export async function deactivateStaff(input: {
   adminUserId: string
   ip?: string
 }): Promise<DeactivateStaffResult> {
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const row = await tx.adminUser.findUnique({
       where: { id: input.adminUserId },
       select: { id: true, userId: true, isActive: true },

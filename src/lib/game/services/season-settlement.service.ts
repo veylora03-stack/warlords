@@ -30,7 +30,7 @@
  */
 
 import { Prisma } from '@prisma/client'
-import { db } from '@/lib/db'
+import { dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import type { Tx } from './player-bootstrap.service'
@@ -485,7 +485,7 @@ class SettlementSimulated extends Error {
  */
 export async function simulateSeasonSettlement(): Promise<SettlementReport> {
   try {
-    return await db.$transaction(async (tx) => {
+    return await dbWrite.$transaction(async (tx) => {
       const report = await executeSettlementInTx(tx, { dryRun: true })
       throw new SettlementSimulated(report)
     }, ECONOMY_TX_OPTIONS)
@@ -503,7 +503,7 @@ export async function settleSeason(actorUserId: string): Promise<SettlementRepor
   if (typeof actorUserId !== 'string' || actorUserId.length === 0) {
     throw new AppError('VALIDATION_ERROR', 'Settlement requires an authenticated actor')
   }
-  return db.$transaction(
+  return dbWrite.$transaction(
     (tx) => executeSettlementInTx(tx, { dryRun: false, actorUserId }),
     ECONOMY_TX_OPTIONS,
   )

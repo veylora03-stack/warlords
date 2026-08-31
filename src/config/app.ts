@@ -7,6 +7,6 @@
  */
 
 export const APP_NAME = 'WARLORDS'
-export const APP_VERSION = '0.12.0-phase23'
-export const APP_PHASE = 23
-export const APP_PHASE_LABEL = 'Phase 23 — Security Audit'
+export const APP_VERSION = '0.14.0-phase25'
+export const APP_PHASE = 25
+export const APP_PHASE_LABEL = 'Phase 25 — Performance & Scalability'

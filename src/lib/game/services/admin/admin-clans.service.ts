@@ -8,7 +8,7 @@
  * war history is Restrict-protected and must never be orphaned.
  */
 
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { ADMIN_CONFIRMATIONS } from '@/lib/game/config/admin'
 import { recordAdminAuditInTx, recordAdminAuditView, type Paginated } from './admin-audit.service'
@@ -157,7 +157,7 @@ export async function disbandClan(input: {
     throw new AppError('VALIDATION_ERROR', 'Disband requires a reason (4+ chars)')
   }
 
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const clan = await tx.clan.findUnique({
       where: { id: input.clanId },
       include: { members: { select: { playerId: true } } },

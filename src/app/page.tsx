@@ -113,6 +113,16 @@ const PHASES: PhaseRow[] = [
     name: 'Security Audit (staff-ban rail · economy CAS · claim-guarded delivery · rate limits · headers)',
     state: 'done',
   },
+  {
+    id: '24',
+    name: 'Full QA & Testing (537 tests · negative matrix · season rewards · full-journey E2E)',
+    state: 'done',
+  },
+  {
+    id: '25',
+    name: 'Performance & Scalability (write-engine isolation · WAL · state 17→7 queries · memoized catalogs)',
+    state: 'done',
+  },
   { id: '08?', name: 'Battle Engine (proposed)', state: 'next' },
   { id: '—', name: 'Territory, Quests & World', state: 'planned' },
   { id: '—', name: 'Telegram Bot', state: 'planned' },
@@ -122,45 +132,42 @@ const PHASES: PhaseRow[] = [
 
 const DELIVERABLES = [
   {
-    label: 'Economy credits — bounded compare-and-set loop (no last-write-wins minting window)',
-    file: 'services/economy.service.ts persistWalletCredit',
-  },
-  {
-    label: 'Staff-target rail — active staff cannot be banned via the player path; self-ban refused',
-    file: 'services/admin/admin-players.service.ts banPlayer',
+    label:
+      'Write-engine isolation — interactive transactions run on a dedicated Prisma engine, immune to read-flood queueing',
+    file: 'lib/db.ts dbWrite · economy.service runEconomyTransaction',
   },
   {
     label:
-      'Notification delivery — claim-guarded inbox creation + finalize (stale claims cannot duplicate)',
-    file: 'services/notification.service.ts ensureInboxDelivered',
+      'Transaction-free read paths — season view/ranking resolve via guarded atomic transitions (no BEGIN IMMEDIATE on reads)',
+    file: 'services/season.service.ts resolveSeasonState',
   },
   {
-    label: 'Principal rate limits — identity-keyed groups incl. broadcast 5/min · settle 5/min',
-    file: 'lib/rate-limit/index.ts RATE_LIMIT_GROUPS',
+    label:
+      'State bootstrap consolidation — /player/state 17 → 7 queries (one parallel read round for player/wallet/army/buildings/tech)',
+    file: 'services/player-state.service.ts getPlayerState',
   },
   {
-    label: 'Transport hardening — 64 KiB body cap · foreign-Origin write rejection · last-hop client IP',
-    file: 'lib/api/route-handler.ts · request-info.ts clientIp',
+    label: 'Memoized catalog views — army + building config projections computed once per process (pure, zero staleness)',
+    file: 'services/army.service.ts · city.service.ts catalog views',
   },
   {
-    label: 'Security headers — CSP frame-ancestors (Telegram allowlist) · nosniff · referrer · HSTS',
-    file: 'next.config.ts securityHeaders',
+    label: 'WAL journal mode (persistent) + V6 db-verify invariant — readers never block the single SQLite writer',
+    file: 'scripts/db-verify.ts V6-wal',
   },
   {
-    label: 'Destructive-op rail — season settle demands the typed RESET SEASON confirmation',
-    file: 'POST /api/v1/admin/season/settle/execute',
+    label:
+      'Connection pool tuning — connection_limit=40 · pool_timeout=10 for the WAL read fan (measured, not guessed)',
+    file: '.env DATABASE_URL',
   },
   {
-    label: 'Fan-out chunking — 500-row batches under the SQLite/PG bind-parameter ceilings',
-    file: 'services/notification.service.ts enqueueNotificationFanOutInTx',
+    label:
+      'Benchmark harness — 200-virtual-player load test (weighted op mix · think time · p50–p99 · RSS/CPU sampling)',
+    file: 'scripts/bench/loadtest.ts',
   },
   {
-    label: 'Idempotency TTL — expired grant keys re-execute per contract + ops-tick pruning',
-    file: 'pruneExpiredIdempotencyKeys · grantResources fast-path',
-  },
-  {
-    label: 'Regression suites — 14 unit + 19 integration security tests (one per fixed issue)',
-    file: 'tests/unit/security-hardening.test.ts · tests/integration/security/',
+    label:
+      'Measured capacity — 100 players zero-error at 37 RPS (reads p99 ≤ 4 s); 8-way write collapse 95.4 s → 0.78 s (122×)',
+    file: 'docs/PHASE25-PERFORMANCE-REPORT.md',
   },
 ]
 
@@ -585,7 +592,7 @@ export default function WarlordsConsole() {
               <div className="flex items-center gap-2">
                 <NotificationBell enabled={signedIn} />
                 <Badge className="bg-amber-500 px-3 py-1 text-sm font-bold text-zinc-950">
-                  PHASE 23 COMPLETE
+                  PHASE 25 COMPLETE
                 </Badge>
               </div>
               <span className="font-mono text-xs text-zinc-500">
@@ -1635,7 +1642,7 @@ export default function WarlordsConsole() {
         <Card className="mt-6 border-zinc-800 bg-zinc-900/60">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold text-zinc-100">
-              Phase 23 — Security Audit Deliverables
+              Phase 25 — Performance & Scalability Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2">
@@ -1667,7 +1674,7 @@ export default function WarlordsConsole() {
       {/* ── Sticky footer ──────────────────────────────────────────────── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-1 px-4 py-4 text-[11px] text-zinc-600 sm:flex-row sm:px-6">
-          <span>WARLORDS Dev Console · Phase 23 · awaiting approval for Phase 24</span>
+          <span>WARLORDS Dev Console · Phase 25 · awaiting approval for Phase 26</span>
           <span className="font-mono">server-authoritative · never trust the client</span>
         </div>
       </footer>

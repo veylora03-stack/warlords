@@ -37,7 +37,7 @@
 
 import { Prisma } from '@prisma/client'
 import { createHash } from 'node:crypto'
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError, errors } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import { withKeyLock } from '@/lib/concurrency/mutex'
@@ -689,15 +689,32 @@ export const ECONOMY_TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const
  * mutex with bounded transient-retry (SQLite BUSY/P1008 in dev; harmless on
  * PostgreSQL). Embedded callers that already own a tx should NOT use this —
  * they call applyResourceDeltas/spend/grant directly inside their own tx.
+ *
+ * Phase 25: the transaction ALSO runs behind the process-wide `db:write`
+ * mutex. Measured evidence (scripts/bench/): raw multi-process SQLite (WAL)
+ * executes concurrent BEGIN IMMEDIATE write transactions in ≤0.1 ms each,
+ * but ≥4 CONCURRENT Prisma interactive transactions collapse into 5 s
+ * P1008 socket-timeout storms (a ~1000× pathology in the engine's SQLite
+ * transaction handling). SQLite has exactly one writer anyway, so global
+ * in-process serialization loses nothing and turns every write tx back
+ * into a raw-speed operation. Lock order is wallet → db:write everywhere;
+ * tx-scoped helpers must never call this function (non-reentrant mutex).
+ * On PostgreSQL the lock is redundant-but-harmless; row-level CAS remains
+ * the multi-instance correctness backstop.
  */
 export async function runEconomyTransaction<T>(
   playerId: string,
   run: (tx: Tx) => Promise<T>,
 ): Promise<T> {
   return withKeyLock(`wallet:${playerId}`, () =>
-    withWriteRetry(() => db.$transaction(run, ECONOMY_TX_OPTIONS)),
+    withKeyLock(DB_WRITE_LOCK, () =>
+      withWriteRetry(() => dbWrite.$transaction(run, ECONOMY_TX_OPTIONS)),
+    ),
   )
 }
+
+/** Process-wide write-transaction mutex key (see runEconomyTransaction). */
+export const DB_WRITE_LOCK = 'db:write'
 
 // ── Retention (expired idempotency keys — called from the ops tick) ─────────
 

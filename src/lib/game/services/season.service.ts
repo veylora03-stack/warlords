@@ -27,7 +27,7 @@
  */
 
 import { Prisma } from '@prisma/client'
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError, errors } from '@/lib/api/errors'
 import { logger } from '@/lib/logger'
 import { withKeyLock } from '@/lib/concurrency/mutex'
@@ -101,6 +101,54 @@ export async function resolveSeasonStateInTx(tx: Tx, now = new Date()): Promise<
     log.info('season finished by scheduler (awaiting settlement)', {
       seasonNumber: current.number,
     })
+  }
+
+  return current
+}
+
+/**
+ * READ-PATH season resolution — no interactive transaction.
+ *
+ * Rationale (Phase 25): Prisma's SQLite interactive transactions run
+ * `BEGIN IMMEDIATE`, taking the database's RESERVED (write) lock — so
+ * wrapping a pure read projection in `$transaction` serializes EVERY such
+ * read behind the single global writer. The clock transitions here are
+ * guarded conditional `updateMany` statements, which are atomic on their
+ * own; losing the race to another process just means re-reading the row.
+ * Transactional callers (awardSeasonPointsInTx, settlement) keep using
+ * `resolveSeasonStateInTx` inside their existing transaction.
+ */
+export async function resolveSeasonState(now = new Date()): Promise<SeasonRow | null> {
+  const current = (await db.season.findFirst({
+    orderBy: { number: 'desc' },
+  })) as SeasonRow | null
+  if (!current) return null
+
+  const transition = async (
+    from: string,
+    to: 'ACTIVE' | 'FINISHED',
+    message: string,
+  ): Promise<boolean> => {
+    const claim = await db.season.updateMany({
+      where: { id: current.id, status: from },
+      data: { status: to },
+    })
+    if (claim.count === 1) {
+      current.status = to
+      log.info(message, { seasonNumber: current.number })
+      return true
+    }
+    // Another process flipped it first — adopt the authoritative row.
+    const fresh = (await db.season.findUnique({ where: { id: current.id } })) as SeasonRow | null
+    if (fresh) current.status = fresh.status
+    return false
+  }
+
+  if (current.status === 'UPCOMING' && current.startsAt.getTime() <= now.getTime()) {
+    await transition('UPCOMING', 'ACTIVE', 'season activated by scheduler')
+  }
+  if (current.status === 'ACTIVE' && current.endsAt.getTime() <= now.getTime()) {
+    await transition('ACTIVE', 'FINISHED', 'season finished by scheduler (awaiting settlement)')
   }
 
   return current
@@ -240,56 +288,44 @@ async function liveRankOf(
 
 export async function getSeasonView(playerId: string): Promise<SeasonView> {
   const rules = seasonRulesOrThrow()
-  const view = await withWriteRetry(() =>
-    db.$transaction(async (tx) => {
-      const now = new Date()
-      const season = await resolveSeasonStateInTx(tx, now)
-      const player = await tx.player.findUnique({
-        where: { id: playerId },
-        select: { seasonPoints: true, createdAt: true },
-      })
-      if (!player) throw errors.notFoundPlayer()
+  // Read-path: plain statements, NO interactive transaction — see
+  // resolveSeasonState for the SQLite BEGIN IMMEDIATE rationale.
+  const now = new Date()
+  const season = await resolveSeasonState(now)
+  const player = await db.player.findUnique({
+    where: { id: playerId },
+    select: { seasonPoints: true, createdAt: true },
+  })
+  if (!player) throw errors.notFoundPlayer()
 
-      let shards = 0n
-      if (season) {
-        const wallet = await tx.seasonWallet.findUnique({
-          where: { seasonId_playerId: { seasonId: season.id, playerId } },
-          select: { shards: true },
-        })
-        shards = wallet?.shards ?? 0n
-      }
+  let shards = 0n
+  if (season) {
+    const wallet = await db.seasonWallet.findUnique({
+      where: { seasonId_playerId: { seasonId: season.id, playerId } },
+      select: { shards: true },
+    })
+    shards = wallet?.shards ?? 0n
+  }
 
-      const rank = await liveRankOf(tx, playerId, player.seasonPoints)
-      const timeLeftSec =
-        season && season.status === 'ACTIVE'
-          ? Math.max(0, Math.ceil((season.endsAt.getTime() - now.getTime()) / 1000))
-          : null
-
-      return {
-        season: season
-          ? {
-              id: season.id,
-              number: season.number,
-              name: season.name,
-              status: season.status as SeasonStatus,
-              startsAt: season.startsAt.toISOString(),
-              endsAt: season.endsAt.toISOString(),
-              timeLeftSec,
-              settledAt: season.settledAt?.toISOString() ?? null,
-            }
-          : null,
-        me: {
-          seasonPoints: player.seasonPoints,
-          rank,
-          shards: shards.toString(),
-        },
-        settlementPending: (season?.status === 'FINISHED' && season.settledAt === null) || false,
-      }
-    }, ECONOMY_TX_OPTIONS),
-  )
+  const rank = await liveRankOf(db, playerId, player.seasonPoints)
+  const timeLeftSec =
+    season && season.status === 'ACTIVE'
+      ? Math.max(0, Math.ceil((season.endsAt.getTime() - now.getTime()) / 1000))
+      : null
 
   return {
-    season: view.season,
+    season: season
+      ? {
+          id: season.id,
+          number: season.number,
+          name: season.name,
+          status: season.status as SeasonStatus,
+          startsAt: season.startsAt.toISOString(),
+          endsAt: season.endsAt.toISOString(),
+          timeLeftSec,
+          settledAt: season.settledAt?.toISOString() ?? null,
+        }
+      : null,
     rules: {
       durationDays: rules.durationDays,
       score: rules.score,
@@ -297,8 +333,12 @@ export async function getSeasonView(playerId: string): Promise<SeasonView> {
       permanentProgression: [...PERMANENT_PROGRESSION_CATALOG],
       seasonalReset: [...SEASONAL_RESET_CATALOG],
     },
-    me: view.me,
-    settlementPending: view.settlementPending,
+    me: {
+      seasonPoints: player.seasonPoints,
+      rank,
+      shards: shards.toString(),
+    },
+    settlementPending: (season?.status === 'FINISHED' && season.settledAt === null) || false,
   }
 }
 
@@ -366,44 +406,44 @@ export async function getSeasonRankingView(
     }
   }
 
-  const result = await withWriteRetry(() =>
-    db.$transaction(async (tx) => {
-      const now = new Date()
-      const season = await resolveSeasonStateInTx(tx, now)
-      if (!season) throw new AppError('SEASON_NOT_FOUND', 'No season exists yet')
+  const result = await (async () => {
+    // Read-path: plain statements, NO interactive transaction — see
+    // resolveSeasonState for the SQLite BEGIN IMMEDIATE rationale.
+    const now = new Date()
+    const season = await resolveSeasonState(now)
+    if (!season) throw new AppError('SEASON_NOT_FOUND', 'No season exists yet')
 
-      const me = await tx.player.findUnique({
-        where: { id: playerId },
-        select: { seasonPoints: true },
-      })
-      if (!me) throw errors.notFoundPlayer()
+    const me = await db.player.findUnique({
+      where: { id: playerId },
+      select: { seasonPoints: true },
+    })
+    if (!me) throw errors.notFoundPlayer()
 
-      const top = await tx.player.findMany({
-        where: { seasonPoints: { gte: rules.minScoreToRank } },
-        orderBy: [{ seasonPoints: 'desc' }, { id: 'asc' }],
-        take: limit,
-        select: { id: true, name: true, seasonPoints: true },
-      })
+    const top = await db.player.findMany({
+      where: { seasonPoints: { gte: rules.minScoreToRank } },
+      orderBy: [{ seasonPoints: 'desc' }, { id: 'asc' }],
+      take: limit,
+      select: { id: true, name: true, seasonPoints: true },
+    })
 
-      const live: RankedRow[] = top.map((player, index) => ({
-        rank: index + 1,
-        playerId: player.id,
-        playerName: player.name,
-        score: player.seasonPoints,
-        tier: seasonTierForRank(index + 1, rules)?.name ?? null,
-      }))
+    const live: RankedRow[] = top.map((player, index) => ({
+      rank: index + 1,
+      playerId: player.id,
+      playerName: player.name,
+      score: player.seasonPoints,
+      tier: seasonTierForRank(index + 1, rules)?.name ?? null,
+    }))
 
-      const myRank = await liveRankOf(tx, playerId, me.seasonPoints)
-      return {
-        seasonId: season.id,
-        seasonNumber: season.number,
-        seasonStatus: season.status as SeasonStatus,
-        live,
-        history: null,
-        me: { rank: myRank, score: me.seasonPoints },
-      }
-    }, ECONOMY_TX_OPTIONS),
-  )
+    const myRank = await liveRankOf(db, playerId, me.seasonPoints)
+    return {
+      seasonId: season.id,
+      seasonNumber: season.number,
+      seasonStatus: season.status as SeasonStatus,
+      live,
+      history: null,
+      me: { rank: myRank, score: me.seasonPoints },
+    }
+  })()
   return result
 }
 
@@ -680,7 +720,7 @@ export async function equipTitle(
 ): Promise<{ equippedTitleId: string | null }> {
   return withKeyLock(`wallet:${playerId}`, () =>
     withWriteRetry(() =>
-      db.$transaction(async (tx) => {
+      dbWrite.$transaction(async (tx) => {
         if (titleId !== null) {
           const owned = await tx.playerTitle.findUnique({
             where: { playerId_titleId: { playerId, titleId } },

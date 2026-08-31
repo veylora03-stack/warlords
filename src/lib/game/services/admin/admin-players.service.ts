@@ -7,7 +7,7 @@
  * only flips the authoritative flag, transactionally and audited.
  */
 
-import { db } from '@/lib/db'
+import { db, dbWrite } from '@/lib/db'
 import { AppError } from '@/lib/api/errors'
 import { ECONOMY_RESOURCES } from '@/lib/game/config/economy'
 import { ADMIN_PANEL_POLICY } from '@/lib/game/config/admin'
@@ -331,7 +331,7 @@ export async function banPlayer(input: BanPlayerInput): Promise<BanPlayerResult>
   const reason = assertReason(input.reason)
   const now = new Date()
 
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const player = await tx.player.findUnique({
       where: { id: input.playerId },
       select: {
@@ -415,7 +415,7 @@ export async function unbanPlayer(input: {
 }): Promise<UnbanPlayerResult> {
   const note = input.note?.trim() || null
 
-  return db.$transaction(async (tx) => {
+  return dbWrite.$transaction(async (tx) => {
     const player = await tx.player.findUnique({
       where: { id: input.playerId },
       select: { id: true, name: true, user: { select: { id: true, isBanned: true } } },

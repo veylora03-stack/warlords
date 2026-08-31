@@ -23,6 +23,39 @@ import {
   computeUnitStackPower,
 } from '@/lib/game/config/power'
 
+/**
+ * Pure aggregation over ALREADY-LOADED rows (Phase 25): lets the state
+ * projection compute power from the same parallel read round it uses for
+ * army/city data instead of issuing three more queries.
+ */
+export function computePowerFromRows(
+  stacks: Array<{ count: number; unit: { attack: number; defense: number; health: number; tier: number } }>,
+  buildings: Array<{ type: string; level: number }>,
+  techs: Array<{ level: number; technology: { branch: string } }>,
+): PowerBreakdown {
+  let units = 0
+  for (const stack of stacks) {
+    units += computeUnitStackPower(stack.unit, stack.count)
+  }
+
+  let buildingPower = 0
+  for (const building of buildings) {
+    buildingPower += computeBuildingPower(building.type, building.level)
+  }
+
+  let technologies = 0
+  for (const tech of techs) {
+    technologies += computeTechPower(tech.technology.branch, tech.level)
+  }
+
+  return {
+    units,
+    buildings: buildingPower,
+    technologies,
+    total: units + buildingPower + technologies,
+  }
+}
+
 /** Aggregates every power source for a player from server-owned state. */
 export async function computePlayerPower(tx: Tx, playerId: string): Promise<PowerBreakdown> {
   // Army: stacks joined with the unit catalog (attack/defense/health/tier).
@@ -46,27 +79,7 @@ export async function computePlayerPower(tx: Tx, playerId: string): Promise<Powe
     select: { level: true, technology: { select: { branch: true } } },
   })
 
-  let units = 0
-  for (const stack of stacks) {
-    units += computeUnitStackPower(stack.unit, stack.count)
-  }
-
-  let buildingPower = 0
-  for (const building of buildings) {
-    buildingPower += computeBuildingPower(building.type, building.level)
-  }
-
-  let technologies = 0
-  for (const tech of techs) {
-    technologies += computeTechPower(tech.technology.branch, tech.level)
-  }
-
-  return {
-    units,
-    buildings: buildingPower,
-    technologies,
-    total: units + buildingPower + technologies,
-  }
+  return computePowerFromRows(stacks, buildings, techs)
 }
 
 /**
