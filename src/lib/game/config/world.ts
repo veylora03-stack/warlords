@@ -66,6 +66,12 @@ export interface TerrainDefinition {
   defenseBps: number
   /** Production multiplier for the cell's resource (bps above neutral 10_000). */
   productionMultiplierBps: number
+  /**
+   * Movement cost for MARCHING THROUGH/INTO this terrain (bps above neutral
+   * 10_000 — Phase 33). Read by the march engine's travel-time function;
+   * never duplicated there.
+   */
+  moveCostBps: number
   /** Relative generation weight (integer; weighted pick in the generator). */
   weight: number
   /** What this terrain produces when the cell is a producing territory. */
@@ -80,6 +86,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: 0,
     defenseBps: 0,
     productionMultiplierBps: 10_000,
+    moveCostBps: 10_000,
     weight: 30,
     resource: 'FOOD',
     color: 'lime',
@@ -89,6 +96,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -500,
     defenseBps: 500,
     productionMultiplierBps: 12_000,
+    moveCostBps: 12_000,
     weight: 20,
     resource: 'WOOD',
     color: 'emerald',
@@ -98,6 +106,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -1000,
     defenseBps: 1000,
     productionMultiplierBps: 14_000,
+    moveCostBps: 15_000,
     weight: 10,
     resource: 'IRON',
     color: 'zinc',
@@ -107,6 +116,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -250,
     defenseBps: 0,
     productionMultiplierBps: 11_000,
+    moveCostBps: 11_000,
     weight: 10,
     resource: 'GOLD',
     color: 'amber',
@@ -116,6 +126,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -750,
     defenseBps: 750,
     productionMultiplierBps: 9_000,
+    moveCostBps: 16_000,
     weight: 7,
     resource: 'FOOD',
     color: 'teal',
@@ -125,6 +136,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -500,
     defenseBps: 500,
     productionMultiplierBps: 12_000,
+    moveCostBps: 12_000,
     weight: 12,
     resource: 'GOLD',
     color: 'yellow',
@@ -134,6 +146,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -750,
     defenseBps: 250,
     productionMultiplierBps: 13_000,
+    moveCostBps: 14_000,
     weight: 6,
     resource: 'FOOD',
     color: 'sky',
@@ -143,6 +156,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: -250,
     defenseBps: 250,
     productionMultiplierBps: 10_000,
+    moveCostBps: 10_000,
     weight: 4,
     resource: 'CRYSTAL',
     color: 'cyan',
@@ -152,6 +166,7 @@ export const TERRAIN: Record<TerrainType, TerrainDefinition> = {
     attackBps: 0,
     defenseBps: 0,
     productionMultiplierBps: 10_000,
+    moveCostBps: 10_000,
     weight: 0, // never generated — CITY cells are player capitals only
     resource: 'GOLD',
     color: 'orange',
@@ -367,6 +382,8 @@ export const WORLD_ADMIN = {
       problems.push(`terrain ${terrain} attackBps out of range`)
     if (def.defenseBps < 0 || def.defenseBps > 10_000)
       problems.push(`terrain ${terrain} defenseBps out of range`)
+    if (def.moveCostBps < 5_000 || def.moveCostBps > 30_000)
+      problems.push(`terrain ${terrain} moveCostBps out of range (5_000..30_000)`)
     if (!ECONOMY_RESOURCES.includes(def.resource))
       problems.push(`terrain ${terrain} resource must be an economy resource`)
   }

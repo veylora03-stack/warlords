@@ -160,6 +160,26 @@ export const NOTIFICATION_PAYLOAD_SCHEMAS = {
     title: z.string().trim().min(4).max(120),
     body: z.string().trim().min(4).max(2000),
   }),
+  // Phase 33 — march engine (army movement).
+  MARCH_RETURNED: z.object({
+    marchId: idString,
+    action: z.enum(['ATTACK', 'DEFEND', 'SCOUT', 'REINFORCE']),
+    unitsReturned: z.number().int().min(1).max(1_000_000),
+    unitsLost: z.number().int().min(0).max(1_000_000),
+    destinationCoord: z.object({
+      x: z.number().int().min(0).max(100_000),
+      y: z.number().int().min(0).max(100_000),
+    }),
+  }),
+  MARCH_CANCELLED: z.object({
+    marchId: idString,
+    action: z.enum(['ATTACK', 'DEFEND', 'SCOUT', 'REINFORCE']),
+    unitsReleased: z.number().int().min(1).max(1_000_000),
+    destinationCoord: z.object({
+      x: z.number().int().min(0).max(100_000),
+      y: z.number().int().min(0).max(100_000),
+    }),
+  }),
 } as const satisfies Record<NotificationType, z.ZodType>
 
 export type NotificationPayloadMap = {
@@ -203,6 +223,8 @@ export const NOTIFICATION_TYPE_CHANNELS: Record<NotificationType, readonly Notif
     EVENT: ['IN_APP', 'TELEGRAM'],
     RANK_CHANGE: ['IN_APP'],
     ANNOUNCEMENT: ['IN_APP'],
+    MARCH_RETURNED: ['IN_APP'],
+    MARCH_CANCELLED: ['IN_APP'],
   }
 
 // ── Server-side rendering (validated payload → title/body) ───────────────────
@@ -327,6 +349,21 @@ export function renderNotification<K extends NotificationType>(
       const p = payload as NotificationPayloadMap['ANNOUNCEMENT']
       return { title: p.title, body: p.body }
     }
+    case 'MARCH_RETURNED': {
+      const p = payload as NotificationPayloadMap['MARCH_RETURNED']
+      const losses = p.unitsLost > 0 ? ` ${p.unitsLost} lost.` : ' No losses.'
+      return {
+        title: 'Expedition returned',
+        body: `Your ${p.action.toLowerCase()} march came home from (${p.destinationCoord.x},${p.destinationCoord.y}) — ${p.unitsReturned} units restored.${losses}`,
+      }
+    }
+    case 'MARCH_CANCELLED': {
+      const p = payload as NotificationPayloadMap['MARCH_CANCELLED']
+      return {
+        title: 'March recalled',
+        body: `Your ${p.action.toLowerCase()} march to (${p.destinationCoord.x},${p.destinationCoord.y}) was recalled — ${p.unitsReleased} units released home.`,
+      }
+    }
   }
 }
 
@@ -358,6 +395,8 @@ export const notificationDedupeKeys = {
   seasonRank: (seasonId: string, playerId: string) => `season_rank:${seasonId}:${playerId}`,
   welcome: (playerId: string) => `welcome:${playerId}`,
   announcement: (announcementId: string) => `announcement:${announcementId}`,
+  marchReturned: (marchId: string) => `march_returned:${marchId}`,
+  marchCancelled: (marchId: string) => `march_cancelled:${marchId}`,
 } as const
 
 // ── Invariants (unit-tested) ─────────────────────────────────────────────────

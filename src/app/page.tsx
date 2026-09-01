@@ -60,6 +60,7 @@ import {
   type AttackTargetRow,
 } from '@/features/battle'
 import { QuestsSection } from '@/features/quests'
+import { MarchesSection } from '@/features/marches'
 import { WorldMapSection } from '@/features/world'
 
 type PhaseState = 'done' | 'next' | 'planned'
@@ -2019,6 +2020,10 @@ export default function WarlordsConsole() {
           {/* World Map & Territories — live from /api/v1/world* (Phase 32);
               self-contained section card: hooks inside, enabled while signed in */}
           <WorldMapSection signedIn={signedIn} />
+
+          {/* Marches — live from /api/v1/marches* (Phase 33); self-contained
+              section card: hooks inside, enabled while signed in */}
+          <MarchesSection signedIn={signedIn} />
 
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">

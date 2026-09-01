@@ -45,7 +45,10 @@ describe('notification catalog structure', () => {
     expect(NOTIFICATION_TYPES).toContain('ANNOUNCEMENT')
     // Phase 31 adds ACHIEVEMENT_UNLOCKED to the union (permanent honors).
     expect(NOTIFICATION_TYPES).toContain('ACHIEVEMENT_UNLOCKED')
-    expect(NOTIFICATION_TYPES.length).toBe(13)
+    // Phase 33 adds the march-engine types (army movement lifecycle).
+    expect(NOTIFICATION_TYPES).toContain('MARCH_RETURNED')
+    expect(NOTIFICATION_TYPES).toContain('MARCH_CANCELLED')
+    expect(NOTIFICATION_TYPES.length).toBe(15)
   })
 
   it('gives every type a payload schema and a non-empty channel list with IN_APP mandatory', () => {

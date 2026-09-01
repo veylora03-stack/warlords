@@ -301,19 +301,37 @@ model TrainingQueueItem {
   @@map("training_queue_items")
 }
 
-/// Army movement (attack/scout/reinforce/return). Resolution creates a Battle.
+/// Army movement (attack/scout/reinforce/defend + return leg). Resolution
+/// creates a Battle through the EXISTING battle engine (Phase 33).
+/// State machine: EN_ROUTE → RESOLVING (transient exactly-once claim) →
+/// RETURNING → COMPLETED | CANCELLED (while EN_ROUTE) | LOST; ARRIVED is
+/// RESERVED for a future stationed-garrison model (never persisted here).
 model March {
   id             String   @id @default(cuid())
   playerId       String
   targetPlayerId String?
   territoryId    String?
   bossId         String?
-  type           String // ATTACK|SCOUT|REINFORCE|RETURN
-  units          Json // snapshot of committed stacks
+  type           String // ATTACK|DEFEND|SCOUT|REINFORCE|RETURN (RETURN stays reserved — return legs are phases of the expedition row)
+  units          Json // snapshot of committed stacks [{unitId,count}] — immutable reservation manifest
+  /// Server-derived origin cell (the player's capital coordinates) at
+  /// departure. The client NEVER supplies origin, distance or timing.
+  originX        Int
+  originY        Int
   departedAt     DateTime @default(now())
   arrivesAt      DateTime
-  status         String   @default("EN_ROUTE") // EN_ROUTE|RESOLVING|RETURNING|ARRIVED|CANCELLED
+  /// Homecoming deadline of the return leg (null until the return leg starts).
+  returnsAt      DateTime?
+  /// Return manifest — the surviving stacks written ONCE by the arrival
+  /// transaction. The homecoming processor restores EXACTLY these stacks.
+  survivors      Json?
+  /// Arrival/mission outcome summary (battleId, captured, aborted reason,
+  /// scoutReportId…) — server-written, display-only.
+  outcome        Json?
+  status         String   @default("EN_ROUTE") // EN_ROUTE|RESOLVING|RETURNING|ARRIVED|COMPLETED|CANCELLED|LOST
   battleId       String?  @unique
+  /// Timestamp of the terminal transition (COMPLETED/CANCELLED/LOST).
+  completedAt    DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

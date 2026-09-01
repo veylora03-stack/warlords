@@ -6,8 +6,9 @@
  * Renders the LIVE server viewport (GET /api/v1/world/map) as a CSS grid of
  * terrain-tinted cells with pan/recenter controls, a region strip and a lazy
  * territory detail panel (GET /api/v1/world/territories/[id]) with the
- * server-computed assault verdict, production collection and the append-only
- * ownership history. Every value shown is server-computed — nothing here is
+ * server-computed assault verdict, production collection, the Phase 33 march
+ * launch form and the append-only ownership history. Every value shown is
+ * server-computed — nothing here is
  * mock, hard-coded or optimistic: adjacency, season gates, terrain, garrisons,
  * casualties, capture and production accrual are decided by the server.
  *
@@ -22,9 +23,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
+import { useArmyQuery } from '@/features/army'
+import { useCreateMarch } from '@/features/marches'
+import type { MarchAction } from '@/features/marches'
 import {
   useAttackTerritory,
   useCollectProduction,
@@ -37,6 +42,7 @@ import type {
   AttackBlockerReason,
   BattleOutcome,
   TerritoryAttackResult,
+  TerritoryDetailView,
   TerritoryHistoryReason,
   TerritoryMapCell,
   WorldBounds,
@@ -229,6 +235,222 @@ function MapGrid({ bounds, cellById, ownedIds, selectedId, onSelect }: MapGridPr
           </button>
         )
       })}
+    </div>
+  )
+}
+
+// ── March launch form (Phase 33) ─────────────────────────────────────────────
+
+/** Typed march refusal → human text (server error codes win). */
+const MARCH_ERROR_TEXT: Record<string, string> = {
+  VALIDATION_ERROR: 'Invalid march order',
+  MARCH_INVALID_UNITS: 'Unit stacks are invalid — check the counts',
+  TERRITORY_NOT_FOUND: 'Territory not found',
+  TERRITORY_LOCKED: 'This site is sealed',
+  TERRITORY_CAPITAL_PROTECTED: 'Capitals cannot be attacked',
+  TERRITORY_OWNED: 'You already control this territory',
+  TERRITORY_NOT_ADJACENT: 'Requires an adjacent territory (N/S/E/W)',
+  MARCH_DESTINATION_NOT_OWNED: 'Only your own territories accept DEFEND/REINFORCE',
+  MARCH_ORIGIN_NOT_FOUND: 'No home territory — your capital is missing',
+  MARCH_SLOTS_EXHAUSTED: 'All march slots are busy',
+  ACTION_ON_COOLDOWN: 'Army regrouping — wait out the cooldown',
+  INSUFFICIENT_ENERGY: 'Not enough energy to launch',
+  INSUFFICIENT_UNITS: 'Not enough units available',
+  SEASON_NOT_ACTIVE: 'No active season',
+  IDEMPOTENT_REPLAY: 'This order was already processed',
+}
+
+/** "1h 04m" style arrival estimate for the launch toast (server times only). */
+function formatEta(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`
+  return `${sec}s`
+}
+
+interface MarchActionOption {
+  type: MarchAction
+  enabled: boolean
+}
+
+interface MarchLaunchPanelProps {
+  detail: TerritoryDetailView
+  ownedByViewer: boolean
+}
+
+/**
+ * Compact MARCH block inside the territory detail. The action roster follows
+ * the SERVER's detail verdict: own cell → DEFEND/REINFORCE, foreign cell →
+ * ATTACK/SCOUT (ATTACK selectable only when the server says attackable;
+ * otherwise the attack reasons render as disabled-state text). Units come
+ * from the live army read model with counts clamped to availability — the
+ * server re-validates everything (energy, slots, cooldown, adjacency, season)
+ * at launch and its typed refusals surface as toasts.
+ */
+function MarchLaunchPanel({ detail, ownedByViewer }: MarchLaunchPanelProps) {
+  const [action, setAction] = useState<MarchAction>(ownedByViewer ? 'DEFEND' : 'ATTACK')
+  const [counts, setCounts] = useState<Record<string, number>>({})
+  const { data: army } = useArmyQuery()
+  const createMarch = useCreateMarch()
+  const { toast } = useToast()
+
+  const stacks = army?.units ?? []
+  const locked = detail.status === 'LOCKED'
+  const options: MarchActionOption[] = ownedByViewer
+    ? [
+        { type: 'DEFEND', enabled: !locked },
+        { type: 'REINFORCE', enabled: !locked },
+      ]
+    : [
+        { type: 'ATTACK', enabled: !locked && detail.attack.attackable },
+        { type: 'SCOUT', enabled: !locked },
+      ]
+  const committed = Object.values(counts).reduce((sum, count) => sum + count, 0)
+
+  function setCount(unitId: string, raw: string, max: number) {
+    const parsed = Number.parseInt(raw, 10)
+    const next = Number.isNaN(parsed) ? 0 : Math.min(Math.max(parsed, 0), max)
+    setCounts((prev) => ({ ...prev, [unitId]: next }))
+  }
+
+  function handleLaunch() {
+    const units = stacks
+      .map((stack) => ({ unitId: stack.unitId, count: counts[stack.unitId] ?? 0 }))
+      .filter((entry) => entry.count > 0)
+    if (units.length === 0) return
+    // One idempotency key per logical launch — a retry of the same submission
+    // replays the stored server response instead of marching twice.
+    const key = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : String(Date.now())
+    createMarch.mutate(
+      { territoryId: detail.id, type: action, units, idempotencyKey: key },
+      {
+        onSuccess: (march) => {
+          const etaSec = Math.round((Date.parse(march.arrivesAt) - march.serverNowMs) / 1000)
+          toast({
+            title: `March launched — arrival ~${formatEta(etaSec)}`,
+            description: `${march.type} to (${march.destination.x ?? '?'},${
+              march.destination.y ?? '?'
+            }) · units committed until homecoming`,
+          })
+          setCounts({})
+        },
+        onError: (error) => {
+          const typed = error as Error & { code?: string }
+          toast({
+            title: 'March refused',
+            description:
+              (typed.code ? MARCH_ERROR_TEXT[typed.code] : undefined) ??
+              typed.message ??
+              'March refused — try again',
+            variant: 'destructive',
+          })
+        },
+      },
+    )
+  }
+
+  return (
+    <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+        March
+        <span className="ml-2 font-normal normal-case tracking-normal text-zinc-500">
+          {ownedByViewer ? 'hold or reinforce this territory' : 'attack or scout this territory'}
+        </span>
+      </p>
+
+      {/* Action picker — roster constrained by the server's detail verdict */}
+      <div className="flex flex-wrap gap-1" role="group" aria-label="March action">
+        {options.map((option) => {
+          const selected = option.type === action
+          return (
+            <button
+              key={option.type}
+              type="button"
+              aria-pressed={selected}
+              disabled={!option.enabled}
+              onClick={() => setAction(option.type)}
+              className={`min-h-[36px] rounded border px-2.5 text-[10px] font-semibold uppercase tracking-wider ${
+                selected
+                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                  : option.enabled
+                    ? 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'
+                    : 'border-zinc-800 text-zinc-600'
+              }`}
+            >
+              {option.type}
+            </button>
+          )
+        })}
+      </div>
+      {locked ? (
+        <p className="flex items-center gap-1 text-[10px] text-orange-400">
+          <span aria-hidden>🔒</span>
+          <span className="min-w-0">This site is sealed — marches cannot target it.</span>
+        </p>
+      ) : !ownedByViewer && action === 'ATTACK' && !detail.attack.attackable ? (
+        <ul className="space-y-0.5">
+          {detail.attack.reasons.map((reason) => (
+            <li key={reason} className="flex items-center gap-1 text-[10px] text-orange-400">
+              <span aria-hidden>🔒</span>
+              <span className="min-w-0">{ATTACK_REASON_TEXT[reason] ?? reason}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/* Unit picker — live army stacks, counts clamped to availability */}
+      {army === undefined ? (
+        <p className="text-[10px] text-zinc-500">probing /api/v1/army …</p>
+      ) : stacks.length === 0 ? (
+        <p className="text-[10px] text-zinc-500">No units available — train units first.</p>
+      ) : (
+        <div className="space-y-1">
+          {stacks.map((stack) => (
+            <div key={stack.unitId} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 flex-1 truncate text-[10px] text-zinc-300">
+                {stack.name}
+              </span>
+              <span className="shrink-0 text-[10px] text-zinc-500">{stack.count} avail</span>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={stack.count}
+                step={1}
+                value={counts[stack.unitId] ?? 0}
+                onChange={(event) => setCount(stack.unitId, event.target.value, stack.count)}
+                disabled={createMarch.isPending}
+                aria-label={`Units of ${stack.name} to send`}
+                className="h-8 w-16 border-zinc-700 bg-zinc-950 px-1.5 py-0 text-center font-mono text-[11px] text-zinc-200"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Button
+        size="sm"
+        className="min-h-[44px] w-full bg-amber-500 text-[11px] font-bold text-zinc-950 hover:bg-amber-400"
+        disabled={createMarch.isPending || stacks.length === 0 || committed <= 0}
+        onClick={handleLaunch}
+        aria-label={`Launch a ${action} march to ${territoryLabel(detail)}`}
+      >
+        {createMarch.isPending ? '… LAUNCHING' : '[ LAUNCH MARCH ]'}
+      </Button>
+      {committed <= 0 ? (
+        <p className="text-[10px] text-zinc-500">Commit at least one unit.</p>
+      ) : (
+        <p className="text-[10px] text-zinc-500">
+          {committed} unit{committed === 1 ? '' : 's'} committed
+        </p>
+      )}
+      <p className="text-[10px] leading-relaxed text-zinc-600">
+        Units leave your army while the march is in flight; origin, travel time and the outcome are
+        server-computed.
+      </p>
     </div>
   )
 }
@@ -699,6 +921,16 @@ export function WorldMapSection({ signedIn }: { signedIn: boolean }) {
                         {lastAttack.roundsCount} rounds
                       </p>
                     </div>
+                  ) : null}
+
+                  {/* March launch — server-roster actions + live army unit picker (Phase 33);
+                      remounts per territory so the unit inputs reset on selection */}
+                  {signedIn && detail ? (
+                    <MarchLaunchPanel
+                      key={detail.id}
+                      detail={detail}
+                      ownedByViewer={ownedIds.has(detail.id)}
+                    />
                   ) : null}
 
                   {/* Ownership history — append-only public world record */}

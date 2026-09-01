@@ -134,15 +134,27 @@ export type BattleType = (typeof BATTLE_TYPES)[number]
 export const BATTLE_RESULTS = ['ATTACKER_WIN', 'DEFENDER_WIN', 'DRAW'] as const
 export type BattleResult = (typeof BATTLE_RESULTS)[number]
 
-export const MARCH_TYPES = ['ATTACK', 'SCOUT', 'REINFORCE', 'RETURN'] as const
+/**
+ * March actions (Phase 33). DEFEND joins the Phase 2 roster; RETURN remains
+ * reserved — return legs are phases of the expedition row, not separate rows.
+ */
+export const MARCH_TYPES = ['ATTACK', 'DEFEND', 'SCOUT', 'REINFORCE', 'RETURN'] as const
 export type MarchType = (typeof MARCH_TYPES)[number]
 
+/**
+ * March state machine (Phase 33). COMPLETED and LOST join the Phase 2
+ * vocabulary as terminals; ARRIVED stays reserved for a future
+ * stationed-garrison model (never persisted by the current engine);
+ * RESOLVING is the transient exactly-once processing claim.
+ */
 export const MARCH_STATUSES = [
   'EN_ROUTE',
   'RESOLVING',
   'RETURNING',
   'ARRIVED',
+  'COMPLETED',
   'CANCELLED',
+  'LOST',
 ] as const
 export type MarchStatus = (typeof MARCH_STATUSES)[number]
 
@@ -175,6 +187,8 @@ export const NOTIFICATION_TYPES = [
   'EVENT',
   'RANK_CHANGE',
   'ANNOUNCEMENT', // admin broadcast fan-out (Phase 21 — engine-delivered since Phase 22)
+  'MARCH_RETURNED', // Phase 33 — expedition survivors came home (units restored)
+  'MARCH_CANCELLED', // Phase 33 — expedition recalled while traveling (units released)
 ] as const
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
 

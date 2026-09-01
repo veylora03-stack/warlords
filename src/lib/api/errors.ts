@@ -81,6 +81,13 @@ export const ERROR_CODES = {
   TERRITORY_OWNED: 400,
   TERRITORY_NOT_COLLECTIBLE: 409,
   REGION_NOT_FOUND: 404,
+  // March & army movement engine (Phase 33)
+  MARCH_NOT_FOUND: 404,
+  MARCH_NOT_CANCELLABLE: 409,
+  MARCH_SLOTS_EXHAUSTED: 409,
+  MARCH_ORIGIN_NOT_FOUND: 409,
+  MARCH_DESTINATION_NOT_OWNED: 400,
+  MARCH_INVALID_UNITS: 400,
   // Security hardening (Phase 23)
   /** Optimistic-CAS credit could not settle within its bounded retry budget. */
   RESOURCE_WALLET_CONFLICT: 409,

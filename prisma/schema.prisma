@@ -301,19 +301,51 @@ model TrainingQueueItem {
   @@map("training_queue_items")
 }
 
-/// Army movement (attack/scout/reinforce/return). Resolution creates a Battle.
+/// Army movement (attack/scout/reinforce/defend + return leg). Resolution
+/// creates a Battle through the EXISTING battle engine (Phase 33).
+///
+/// State machine (Phase 33 — extends the Phase 2 vocabulary):
+///   EN_ROUTE    — army is traveling to the destination (units reserved)
+///   RESOLVING   — arrival/return processing claimed (transient state inside
+///                 the processing transaction; the conditional status claim
+///                 is the exactly-once arbiter and is never observable
+///                 committed)
+///   RETURNING   — survivors are traveling home (returnsAt is the deadline)
+///   ARRIVED     — RESERVED for a future stationed-garrison model (never
+///                 persisted by this engine: ATTACK auto-returns, DEFEND and
+///                 REINFORCE restore the detachment on arrival under the
+///                 realm-wide defense model, SCOUT returns with its report)
+///   COMPLETED   — terminal: units restored exactly once (or detachment
+///                 delivered), outcome written
+///   CANCELLED   — terminal: cancelled while EN_ROUTE, units restored, energy
+///                 NOT refunded (mobilization policy)
+///   LOST        — terminal: every committed unit died at the destination
 model March {
   id             String   @id @default(cuid())
   playerId       String
   targetPlayerId String?
   territoryId    String?
   bossId         String?
-  type           String // ATTACK|SCOUT|REINFORCE|RETURN
-  units          Json // snapshot of committed stacks
+  type           String // ATTACK|DEFEND|SCOUT|REINFORCE|RETURN (RETURN stays reserved — return legs are phases of the expedition row)
+  units          Json // snapshot of committed stacks [{unitId,count}] — immutable reservation manifest
+  /// Server-derived origin cell (the player's capital coordinates) at
+  /// departure. The client NEVER supplies origin, distance or timing.
+  originX        Int
+  originY        Int
   departedAt     DateTime @default(now())
   arrivesAt      DateTime
-  status         String   @default("EN_ROUTE") // EN_ROUTE|RESOLVING|RETURNING|ARRIVED|CANCELLED
+  /// Homecoming deadline of the return leg (null until the return leg starts).
+  returnsAt      DateTime?
+  /// Return manifest — the surviving stacks written ONCE by the arrival
+  /// transaction. The homecoming processor restores EXACTLY these stacks.
+  survivors      Json?
+  /// Arrival/mission outcome summary (battleId, captured, aborted reason,
+  /// scoutReportId…) — server-written, display-only.
+  outcome        Json?
+  status         String   @default("EN_ROUTE") // EN_ROUTE|RESOLVING|RETURNING|ARRIVED|COMPLETED|CANCELLED|LOST
   battleId       String?  @unique
+  /// Timestamp of the terminal transition (COMPLETED/CANCELLED/LOST).
+  completedAt    DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

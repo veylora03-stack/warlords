@@ -47,10 +47,13 @@ export const OBJECTIVE_TYPES = [
   'REACH_LEVEL',
   // Reserved extension points — matched by events that do not exist yet:
   'JOIN_CLAN',
-  'SCOUT_TARGET',
+  // Phase 32 — territory domain (activated by world.service events):
   'CAPTURE_TERRITORIES',
   'CONTROL_TERRITORIES',
   'DEFEND_TERRITORIES',
+  // Phase 33 — march domain (activated by march.service events):
+  'SCOUT_TARGET', // was reserved since Phase 2 — consumes MARCH_SCOUTED
+  'MARCHES_COMPLETED', // consumes MARCH_COMPLETED
 ] as const
 export type ObjectiveType = (typeof OBJECTIVE_TYPES)[number]
 
@@ -68,6 +71,7 @@ export const OBJECTIVE_PROGRESS_MODES = {
   CAPTURE_TERRITORIES: 'INCREMENT',
   CONTROL_TERRITORIES: 'SET',
   DEFEND_TERRITORIES: 'INCREMENT',
+  MARCHES_COMPLETED: 'INCREMENT',
 } as const satisfies Record<ObjectiveType, 'INCREMENT' | 'SET'>
 export type ObjectiveProgressMode = (typeof OBJECTIVE_PROGRESS_MODES)[ObjectiveType]
 
@@ -295,6 +299,35 @@ export const QUESTS: QuestCatalogEntry[] = [
     repeatable: true,
     cooldownHours: 0,
     sortOrder: 220,
+  },
+  // ── Phase 33 — march domain (weekly rhythm; real march-engine events) ─────
+  {
+    id: 'weekly-patrol',
+    type: 'WEEKLY',
+    title: 'Patrol Roads',
+    description: 'Complete 5 marches this week. Armies that move, win.',
+    objectiveType: 'MARCHES_COMPLETED',
+    objectiveTarget: { amount: 5 },
+    reward: { GOLD: 400, GEMS: 12, XP: 140 },
+    prerequisiteQuestIds: [],
+    minLevel: 0,
+    repeatable: true,
+    cooldownHours: 0,
+    sortOrder: 230,
+  },
+  {
+    id: 'weekly-recon',
+    type: 'WEEKLY',
+    title: 'Eyes on the Roads',
+    description: 'Scout 3 territories this week. Knowledge is a weapon.',
+    objectiveType: 'SCOUT_TARGET',
+    objectiveTarget: { amount: 3 },
+    reward: { GOLD: 300, GEMS: 10, XP: 120 },
+    prerequisiteQuestIds: [],
+    minLevel: 0,
+    repeatable: true,
+    cooldownHours: 0,
+    sortOrder: 240,
   },
 
   // ── SEASONAL (reset at season settlement; rewards expire with the season) ─

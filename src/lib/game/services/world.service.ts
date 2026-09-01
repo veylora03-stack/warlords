@@ -49,6 +49,7 @@ import {
   type CasualtyRow,
 } from './battle.service'
 import { simulateBattle } from '@/lib/game/engine/battle/simulator'
+import type { BattleSimulationResult } from '@/lib/game/types/battle'
 import {
   adjacentCoords,
   accruedProduction,
@@ -74,7 +75,7 @@ import type { EconomyResource } from '@/lib/game/config/economy'
 import { ECONOMY_TX_OPTIONS, grantResources, runEconomyTransaction } from './economy.service'
 import { syncPlayerEnergy } from './energy.service'
 import { recalculatePlayerPower } from './power.service'
-import { grantXp } from './progression.service'
+import { grantXp, type GrantXpResult } from './progression.service'
 import { awardSeasonPointsInTx, resolveSeasonStateInTx } from './season.service'
 import { resolveSeasonState } from './season-state.service'
 import { recordPlayerStats } from './stats.service'
@@ -246,7 +247,8 @@ export async function ensureWorldGenerated(): Promise<void> {
 
 // ── Terrain defense modifiers ────────────────────────────────────────────────
 
-function terrainDefenseModifiers(terrain: string): BpsModifiers {
+/** Exported for the march engine (Phase 33) — ONE terrain-defense mapping. */
+export function terrainDefenseModifiers(terrain: string): BpsModifiers {
   const defenseBps = TERRAIN[terrain as TerrainType]?.defenseBps ?? 0
   if (defenseBps === 0) return EMPTY_BPS
   return {
@@ -266,7 +268,8 @@ function terrainDefenseModifiers(terrain: string): BpsModifiers {
 // ── Virtual garrison loading ─────────────────────────────────────────────────
 
 /** Loads the active unit catalog ONCE per assault (runtime reads the DB). */
-async function loadGarrisonCatalog(tx: ReadClient): Promise<GarrisonCatalogRow[]> {
+/** Exported for the march engine (Phase 33) — ONE garrison catalog loader. */
+export async function loadGarrisonCatalog(tx: ReadClient): Promise<GarrisonCatalogRow[]> {
   const rows = await tx.unit.findMany({
     where: { isActive: true },
     select: {
@@ -817,6 +820,475 @@ function spoilsSummaryText(spoils: Partial<Record<LootResource, bigint>>): strin
   return `Spoils: ${parts.join(' · ')}.`
 }
 
+// ── Shared assault resolution (Phase 33 — ONE persistence pipeline) ──────────
+
+export interface AssaultResolutionContext {
+  tx: Tx
+  now: Date
+  /** Active season number (the caller resolved the season gate). */
+  seasonNumber: number
+  attacker: { playerId: string; name: string; level: number }
+  /**
+   * Pre-built attacker side. DIRECT assaults pass the home army loaded by
+   * loadArmySide; MARCH arrivals pass the expedition manifest stacks —
+   * ONE army builder exists (battle.service toBattleStack), never two.
+   */
+  attackerArmy: { side: BattleSide; names: Map<string, string> }
+  territory: {
+    id: string
+    x: number
+    y: number
+    name: string | null
+    terrain: string
+    ownerType: string
+    ownerPlayerId: string | null
+    strategicValue: number
+    resourceType: string | null
+    captureCount: number
+    regionId: string | null
+  }
+  defender: {
+    side: BattleSide
+    names: Map<string, string>
+    playerId: string | null
+    name: string | null
+    wasReal: boolean
+  }
+  seed: number
+  unguarded: boolean
+  sim: BattleSimulationResult
+  /** Originating march stamped on the battle row (null for direct assaults). */
+  marchId: string | null
+  /** Energy the caller already spent for this assault (recorded on the row). */
+  energySpent: number
+  /**
+   * TRUE when the attacker's units are the march manifest (in transit — NOT
+   * player_units rows). Attacker losses are then NOT decremented from
+   * player_units; the caller persists the survivor manifest on the march row.
+   */
+  attackerUnitsInTransit: boolean
+}
+
+export interface AssaultResolutionOutcome {
+  battleId: string
+  roundsCount: number
+  captured: boolean
+  captureCount: number
+  spoils: Partial<Record<LootResource, bigint>>
+  attackerHonorDelta: number
+  defenderHonorDelta: number
+  attackerXpAmount: number
+  attackerXp: GrantXpResult
+  seasonPointsAwarded: number
+}
+
+/**
+ * THE territory-assault persistence pipeline (Phase 33 refactor of the
+ * Phase 32 assault core — behavior-preserving). Persists EVERYTHING a
+ * resolved assault produces inside the CALLER'S transaction: the battle row
+ * (+ rounds), casualties, capture spoils through the ledger, the
+ * conditional exactly-once capture + append-only history, honor, XP, season
+ * points, statistics, power recalculation, quest events, achievement
+ * evaluation, battle logs and outbox notifications.
+ *
+ * Callers (attackTerritory and the march arrival processor) own validation,
+ * energy, army loading and the PURE simulation; this function owns every
+ * write. There is exactly ONE pipeline — no second combat persistence path.
+ */
+export async function resolveTerritoryAssaultInTx(
+  ctx: AssaultResolutionContext,
+): Promise<AssaultResolutionOutcome> {
+  const { tx, now, sim } = ctx
+  // ── Persist the battle ──────────────────────────────────────────────────
+  const attackerWon = sim.result === 'ATTACKER_WIN'
+  const defenderWon = sim.result === 'DEFENDER_WIN'
+  const spoils: Partial<Record<LootResource, bigint>> = {}
+  if (attackerWon) {
+    const spoilsResource = (ctx.territory.resourceType ?? 'GOLD') as LootResource
+    const spoilsAmount = Math.min(
+      ctx.territory.strategicValue * WORLD_ATTACK.captureSpoilsPerStrategicValue,
+      WORLD_ATTACK.captureSpoilsCap,
+    )
+    if (spoilsAmount > 0) spoils[spoilsResource] = BigInt(spoilsAmount)
+  }
+
+  const attackerHonorDelta = attackerWon ? WORLD_ATTACK.captureHonor : 0
+  const defenderHonorDelta = ctx.defender.wasReal && defenderWon ? WORLD_ATTACK.defenseWinHonor : 0
+
+  const battle = await tx.battle.create({
+    data: {
+      type: 'TERRITORY_ASSAULT',
+      seed: ctx.seed,
+      configVersion: BATTLE.version,
+      attackerPlayerId: ctx.attacker.playerId,
+      defenderPlayerId: ctx.defender.playerId,
+      territoryId: ctx.territory.id,
+      marchId: ctx.marchId,
+      result: sim.result,
+      attackerPower: BigInt(Math.round(sim.attackerPower)),
+      defenderPower: BigInt(Math.round(sim.defenderPower)),
+      roundsCount: ctx.unguarded ? 0 : new Set(sim.rounds.map((round) => round.roundNumber)).size,
+      loot: Object.fromEntries(
+        Object.entries(spoils).map(([resource, amount]) => [resource, amount.toString()]),
+      ) as Prisma.InputJsonValue,
+      honorDelta: attackerHonorDelta,
+      reputationDelta: 0,
+      energySpent: ctx.energySpent,
+      startedAt: now,
+      endedAt: now,
+    },
+  })
+
+  if (sim.rounds.length > 0) {
+    await tx.battleRound.createMany({
+      data: sim.rounds.map((round) => ({
+        battleId: battle.id,
+        roundNumber: round.roundNumber,
+        side: round.side,
+        unitsCommitted: round.unitsCommitted as unknown as Prisma.InputJsonValue,
+        unitsLost: round.unitsLost as unknown as Prisma.InputJsonValue,
+        damageDealt: BigInt(round.damageDealt),
+        events: round.actions as unknown as Prisma.InputJsonValue,
+      })),
+    })
+  }
+
+  const unitNames = new Map<string, string>([...ctx.attackerArmy.names, ...ctx.defender.names])
+
+  // ── Apply casualties (CAS-guarded decrements — never negative) ──────────
+  const applyLosses = async (ownerId: string, losses: readonly LossRow[]): Promise<void> => {
+    for (const loss of losses) {
+      if (loss.count <= 0) continue
+      const claim = await tx.playerUnit.updateMany({
+        where: { playerId: ownerId, unitId: loss.unitTypeId, count: { gte: loss.count } },
+        data: { count: { decrement: loss.count } },
+      })
+      if (claim.count === 0) {
+        throw new AppError('INTERNAL_ERROR', `Casualty invariant violated for ${loss.unitTypeId}`)
+      }
+    }
+  }
+  if (!ctx.attackerUnitsInTransit) {
+    await applyLosses(ctx.attacker.playerId, sim.attackerLosses)
+  } // March armies: losses are settled against the SURVIVORS MANIFEST by the caller.
+  if (ctx.defender.wasReal) {
+    await applyLosses(ctx.defender.playerId!, sim.defenderLosses)
+  }
+  // Virtual garrison losses are intentionally NOT persisted anywhere.
+
+  // ── Spoils through the ledger (TERRITORY_CAPTURE) ───────────────────────
+  const spoilsEntries = SPOILS_RESOURCES.filter((r) => (spoils[r] ?? 0n) > 0n)
+  if (spoilsEntries.length > 0) {
+    const amounts: Partial<Record<EconomyResource, bigint>> = {}
+    for (const resource of spoilsEntries) {
+      amounts[resource as EconomyResource] = spoils[resource]!
+    }
+    await grantResources(tx, ctx.attacker.playerId, amounts, {
+      reason: 'TERRITORY_CAPTURE',
+      refType: 'territory',
+      refId: ctx.territory.id,
+      metadata: { battleId: battle.id } as unknown as Prisma.InputJsonValue,
+    })
+  }
+
+  // ── Capture (ONLY on ATTACKER_WIN — conditional, exactly-once) ──────────
+  let captured = false
+  let captureCount = ctx.territory.captureCount
+  if (attackerWon) {
+    // Conditional ownership flip — exactly-once arbiter. The OR arm is
+    // required because SQL NULL semantics exclude NULL rows from `not`.
+    const claim = await tx.territory.updateMany({
+      where: {
+        id: ctx.territory.id,
+        OR: [{ ownerPlayerId: null }, { ownerPlayerId: { not: ctx.attacker.playerId } }],
+      },
+      data: {
+        ownerPlayerId: ctx.attacker.playerId,
+        ownerType: 'PLAYER',
+        status: 'CONTROLLED' as TerritoryStatus,
+        lastCapturedAt: now,
+        productionCollectedAt: now,
+        captureCount: { increment: 1 },
+      },
+    })
+    if (claim.count !== 1) {
+      throw new AppError('INTERNAL_ERROR', 'Capture invariant violated — ownership did not flip')
+    }
+    captured = true
+    captureCount = ctx.territory.captureCount + 1
+
+    await tx.territoryHistory.create({
+      data: {
+        territoryId: ctx.territory.id,
+        seasonNumber: ctx.seasonNumber,
+        previousOwnerType: ctx.territory.ownerType === 'PLAYER' ? 'PLAYER' : 'NONE',
+        previousOwnerId: ctx.territory.ownerPlayerId,
+        newOwnerType: 'PLAYER',
+        newOwnerId: ctx.attacker.playerId,
+        battleId: battle.id,
+        reason: 'CAPTURE',
+      },
+    })
+  }
+
+  // ── Rewards: honor, XP, season points ──────────────────────────────────
+  if (attackerHonorDelta > 0) {
+    await tx.player.update({
+      where: { id: ctx.attacker.playerId },
+      data: { honor: { increment: BigInt(attackerHonorDelta) } },
+    })
+  }
+  if (defenderHonorDelta > 0) {
+    await tx.player.update({
+      where: { id: ctx.defender.playerId! },
+      data: { honor: { increment: BigInt(defenderHonorDelta) } },
+    })
+  }
+
+  const attackerXpAmount = attackerWon
+    ? WORLD_ATTACK.captureWinXp
+    : WORLD_ATTACK.attackParticipationXp
+  const attackerXp = await grantXp(tx, {
+    playerId: ctx.attacker.playerId,
+    amount: attackerXpAmount,
+    source: ctx.marchId === null ? 'territory' : 'march',
+  })
+  if (ctx.defender.wasReal) {
+    const defenderXpAmount = defenderWon
+      ? WORLD_ATTACK.defenseWinXp
+      : WORLD_ATTACK.defenseParticipationXp
+    await grantXp(tx, {
+      playerId: ctx.defender.playerId!,
+      amount: defenderXpAmount,
+      source: 'territory',
+    })
+  }
+
+  let seasonPointsAwarded = 0
+  if (attackerWon) {
+    seasonPointsAwarded = await awardSeasonPointsInTx(
+      tx,
+      ctx.attacker.playerId,
+      WORLD_ATTACK.captureSeasonPoints,
+      'TERRITORY_CAPTURE',
+      { battleId: battle.id },
+    )
+  }
+  // A REAL defender who did not lose the territory held it (defense win OR
+  // a costly draw) — the same rule drives stats and the quest event below.
+  const defenderHeld = ctx.defender.wasReal && !attackerWon
+  if (defenderHeld) {
+    await awardSeasonPointsInTx(
+      tx,
+      ctx.defender.playerId!,
+      WORLD_ATTACK.defenseSeasonPoints,
+      'TERRITORY_DEFENSE',
+      { battleId: battle.id },
+    )
+  }
+
+  // ── Statistics (append-only counters) ──────────────────────────────────
+  const sumLosses = (rows: readonly LossRow[]): number =>
+    rows.reduce((sum, row) => sum + row.count, 0)
+  const attackerStats: Record<string, number> = { attacksLaunched: 1 }
+  if (attackerWon) attackerStats['battlesWon'] = 1
+  else if (sim.result === 'DEFENDER_WIN') attackerStats['battlesLost'] = 1
+  const attackerLostUnits = sumLosses(sim.attackerLosses)
+  if (attackerLostUnits > 0) attackerStats['unitsLost'] = attackerLostUnits
+  if (captured) attackerStats['territoriesCaptured'] = 1
+  await recordPlayerStats(tx, ctx.attacker.playerId, attackerStats)
+
+  if (ctx.defender.wasReal) {
+    const defenderStats: Record<string, number> = {}
+    if (defenderHeld) defenderStats['defensesWon'] = 1
+    else if (attackerWon) defenderStats['battlesLost'] = 1
+    const defenderLostUnits = sumLosses(sim.defenderLosses)
+    if (defenderLostUnits > 0) defenderStats['unitsLost'] = defenderLostUnits
+    if (captured) defenderStats['territoriesLost'] = 1
+    if (Object.keys(defenderStats).length > 0) {
+      await recordPlayerStats(tx, ctx.defender.playerId!, defenderStats)
+    }
+  }
+
+  // ── Power recalculation (armies changed) ───────────────────────────────
+  await recalculatePlayerPower(tx, ctx.attacker.playerId)
+  if (ctx.defender.wasReal) {
+    await recalculatePlayerPower(tx, ctx.defender.playerId!)
+  }
+
+  // ── Quest events (typed domain events — same transaction) ──────────────
+  await applyQuestEventInTx(
+    tx,
+    ctx.attacker.playerId,
+    { kind: 'BATTLE_FINISHED', won: attackerWon, role: 'ATTACKER', battleId: battle.id },
+    now,
+  )
+  let ownedCount = 0
+  if (captured) {
+    ownedCount = await tx.territory.count({ where: { ownerPlayerId: ctx.attacker.playerId } })
+    await applyQuestEventInTx(
+      tx,
+      ctx.attacker.playerId,
+      {
+        kind: 'TERRITORY_CAPTURED',
+        territoryId: ctx.territory.id,
+        regionId: ctx.territory.regionId,
+        ownedCount,
+        battleId: battle.id,
+      },
+      now,
+    )
+  }
+  if (ctx.defender.wasReal) {
+    await applyQuestEventInTx(
+      tx,
+      ctx.defender.playerId!,
+      {
+        kind: 'BATTLE_FINISHED',
+        won: defenderWon,
+        role: 'DEFENDER',
+        battleId: battle.id,
+      },
+      now,
+    )
+    if (defenderHeld) {
+      await applyQuestEventInTx(
+        tx,
+        ctx.defender.playerId!,
+        { kind: 'TERRITORY_DEFENDED', territoryId: ctx.territory.id, battleId: battle.id },
+        now,
+      )
+    }
+    if (captured) {
+      await applyQuestEventInTx(
+        tx,
+        ctx.defender.playerId!,
+        { kind: 'TERRITORY_LOST', territoryId: ctx.territory.id, battleId: battle.id },
+        now,
+      )
+    }
+  }
+
+  // ── Achievement evaluation (stats settled above) ───────────────────────
+  await evaluateAchievementsInTx(tx, ctx.attacker.playerId, {}, now)
+  if (ctx.defender.wasReal) {
+    await evaluateAchievementsInTx(tx, ctx.defender.playerId!, {}, now)
+  }
+
+  // ── Battle logs (per-participant reports) ──────────────────────────────
+  const attackerView = {
+    battleId: battle.id,
+    type: 'TERRITORY_ASSAULT',
+    result: sim.result,
+    myRole: 'ATTACKER',
+    territory: {
+      territoryId: ctx.territory.id,
+      x: ctx.territory.x,
+      y: ctx.territory.y,
+      name: ctx.territory.name,
+      terrain: ctx.territory.terrain,
+    },
+    opponent: {
+      playerId: ctx.defender.playerId,
+      name: ctx.defender.name ?? GARRISON_NAME,
+    },
+    roundsCount: battle.roundsCount,
+    seed: battle.seed,
+    configVersion: BATTLE.version,
+    unguarded: ctx.unguarded,
+    yourArmy: ctx.attackerArmy.side.stacks,
+    yourLosses: casualtyRows(sim.attackerLosses, unitNames),
+    enemyLosses: casualtyRows(sim.defenderLosses, unitNames),
+    spoils: Object.fromEntries(
+      Object.entries(spoils).map(([resource, amount]) => [resource, amount.toString()]),
+    ),
+    captured,
+    honorDelta: attackerHonorDelta,
+    energySpent: ctx.energySpent,
+    startedAt: now.toISOString(),
+  }
+  const logs: Array<{ playerId: string; role: 'ATTACKER' | 'DEFENDER'; content: unknown }> = [
+    { playerId: ctx.attacker.playerId, role: 'ATTACKER', content: attackerView },
+  ]
+  if (ctx.defender.wasReal) {
+    logs.push({
+      playerId: ctx.defender.playerId!,
+      role: 'DEFENDER',
+      content: {
+        battleId: battle.id,
+        type: 'TERRITORY_ASSAULT',
+        result: sim.result,
+        myRole: 'DEFENDER',
+        territory: {
+          territoryId: ctx.territory.id,
+          x: ctx.territory.x,
+          y: ctx.territory.y,
+          name: ctx.territory.name,
+          terrain: ctx.territory.terrain,
+        },
+        opponent: { playerId: ctx.attacker.playerId, name: ctx.attacker.name },
+        roundsCount: battle.roundsCount,
+        seed: battle.seed,
+        configVersion: BATTLE.version,
+        yourArmy: ctx.defender.side.stacks,
+        yourLosses: casualtyRows(sim.defenderLosses, unitNames),
+        enemyLosses: casualtyRows(sim.attackerLosses, unitNames),
+        lostTerritory: captured,
+        honorDelta: defenderHonorDelta,
+        startedAt: now.toISOString(),
+      },
+    })
+  }
+  await tx.battleLog.createMany({
+    data: logs.map((entry) => ({
+      battleId: battle.id,
+      playerId: entry.playerId,
+      role: entry.role,
+      content: entry.content as Prisma.InputJsonValue,
+    })),
+  })
+
+  // ── Notifications (existing engine — ATTACK_RESULT) ────────────────────
+  await enqueueNotificationInTx(tx, {
+    playerId: ctx.attacker.playerId,
+    type: 'ATTACK_RESULT',
+    dedupeKey: notificationDedupeKeys.attackResult(battle.id, ctx.attacker.playerId),
+    payload: {
+      battleId: battle.id,
+      viewerRole: 'ATTACKER',
+      outcome: outcomeFor(sim.result, 'ATTACKER'),
+      opponentName: ctx.defender.name ?? GARRISON_NAME,
+      lootSummary: spoilsSummaryText(spoils),
+    },
+  })
+  if (ctx.defender.wasReal) {
+    await enqueueNotificationInTx(tx, {
+      playerId: ctx.defender.playerId!,
+      type: 'ATTACK_RESULT',
+      dedupeKey: notificationDedupeKeys.attackResult(battle.id, ctx.defender.playerId!),
+      payload: {
+        battleId: battle.id,
+        viewerRole: 'DEFENDER',
+        outcome: outcomeFor(sim.result, 'DEFENDER'),
+        opponentName: ctx.attacker.name,
+      },
+    })
+  }
+
+  return {
+    battleId: battle.id,
+    roundsCount: battle.roundsCount,
+    captured,
+    captureCount,
+    spoils,
+    attackerHonorDelta,
+    defenderHonorDelta,
+    attackerXpAmount,
+    attackerXp,
+    seasonPointsAwarded,
+  }
+}
+
 export interface TerritoryAttackInput {
   territoryId: string
   /** Client-generated key — a repeated submission replays the first assault. */
@@ -1092,381 +1564,47 @@ export async function attackTerritory(
       })
     }
 
-    // ── Persist the battle ──────────────────────────────────────────────────
-    const attackerWon = sim.result === 'ATTACKER_WIN'
-    const defenderWon = sim.result === 'DEFENDER_WIN'
-    const spoils: Partial<Record<LootResource, bigint>> = {}
-    if (attackerWon) {
-      const spoilsResource = (territory.resourceType ?? 'GOLD') as LootResource
-      const spoilsAmount = Math.min(
-        territory.strategicValue * WORLD_ATTACK.captureSpoilsPerStrategicValue,
-        WORLD_ATTACK.captureSpoilsCap,
-      )
-      if (spoilsAmount > 0) spoils[spoilsResource] = BigInt(spoilsAmount)
-    }
-
-    const attackerHonorDelta = attackerWon ? WORLD_ATTACK.captureHonor : 0
-    const defenderHonorDelta = defenderWasReal && defenderWon ? WORLD_ATTACK.defenseWinHonor : 0
-
-    const battle = await tx.battle.create({
-      data: {
-        type: 'TERRITORY_ASSAULT',
-        seed,
-        configVersion: BATTLE.version,
-        attackerPlayerId: playerId,
-        defenderPlayerId,
-        territoryId: territory.id,
-        result: sim.result,
-        attackerPower: BigInt(Math.round(sim.attackerPower)),
-        defenderPower: BigInt(Math.round(sim.defenderPower)),
-        roundsCount: unguarded ? 0 : new Set(sim.rounds.map((round) => round.roundNumber)).size,
-        loot: Object.fromEntries(
-          Object.entries(spoils).map(([resource, amount]) => [resource, amount.toString()]),
-        ) as Prisma.InputJsonValue,
-        honorDelta: attackerHonorDelta,
-        reputationDelta: 0,
-        energySpent: WORLD_ATTACK.energyCost,
-        startedAt: now,
-        endedAt: now,
-      },
-    })
-
-    if (sim.rounds.length > 0) {
-      await tx.battleRound.createMany({
-        data: sim.rounds.map((round) => ({
-          battleId: battle.id,
-          roundNumber: round.roundNumber,
-          side: round.side,
-          unitsCommitted: round.unitsCommitted as unknown as Prisma.InputJsonValue,
-          unitsLost: round.unitsLost as unknown as Prisma.InputJsonValue,
-          damageDealt: BigInt(round.damageDealt),
-          events: round.actions as unknown as Prisma.InputJsonValue,
-        })),
-      })
-    }
-
-    // ── Apply casualties (CAS-guarded decrements — never negative) ──────────
-    const applyLosses = async (ownerId: string, losses: readonly LossRow[]): Promise<void> => {
-      for (const loss of losses) {
-        if (loss.count <= 0) continue
-        const claim = await tx.playerUnit.updateMany({
-          where: { playerId: ownerId, unitId: loss.unitTypeId, count: { gte: loss.count } },
-          data: { count: { decrement: loss.count } },
-        })
-        if (claim.count === 0) {
-          throw new AppError('INTERNAL_ERROR', `Casualty invariant violated for ${loss.unitTypeId}`)
-        }
-      }
-    }
-    await applyLosses(playerId, sim.attackerLosses)
-    if (defenderWasReal) {
-      await applyLosses(defenderPlayerId!, sim.defenderLosses)
-    }
-    // Virtual garrison losses are intentionally NOT persisted anywhere.
-
-    // ── Spoils through the ledger (TERRITORY_CAPTURE) ───────────────────────
-    const spoilsEntries = SPOILS_RESOURCES.filter((r) => (spoils[r] ?? 0n) > 0n)
-    if (spoilsEntries.length > 0) {
-      const amounts: Partial<Record<EconomyResource, bigint>> = {}
-      for (const resource of spoilsEntries) {
-        amounts[resource as EconomyResource] = spoils[resource]!
-      }
-      await grantResources(tx, playerId, amounts, {
-        reason: 'TERRITORY_CAPTURE',
-        refType: 'territory',
-        refId: territory.id,
-        metadata: { battleId: battle.id } as unknown as Prisma.InputJsonValue,
-      })
-    }
-
-    // ── Capture (ONLY on ATTACKER_WIN — conditional, exactly-once) ──────────
-    let captured = false
-    let captureCount = territory.captureCount
-    if (attackerWon) {
-      // Conditional ownership flip — exactly-once arbiter. The OR arm is
-      // required because SQL NULL semantics exclude NULL rows from `not`.
-      const claim = await tx.territory.updateMany({
-        where: {
-          id: territory.id,
-          OR: [{ ownerPlayerId: null }, { ownerPlayerId: { not: playerId } }],
-        },
-        data: {
-          ownerPlayerId: playerId,
-          ownerType: 'PLAYER',
-          status: 'CONTROLLED' as TerritoryStatus,
-          lastCapturedAt: now,
-          productionCollectedAt: now,
-          captureCount: { increment: 1 },
-        },
-      })
-      if (claim.count !== 1) {
-        throw new AppError('INTERNAL_ERROR', 'Capture invariant violated — ownership did not flip')
-      }
-      captured = true
-      captureCount = territory.captureCount + 1
-
-      await tx.territoryHistory.create({
-        data: {
-          territoryId: territory.id,
-          seasonNumber: season.number,
-          previousOwnerType: territory.ownerType === 'PLAYER' ? 'PLAYER' : 'NONE',
-          previousOwnerId: territory.ownerPlayerId,
-          newOwnerType: 'PLAYER',
-          newOwnerId: playerId,
-          battleId: battle.id,
-          reason: 'CAPTURE',
-        },
-      })
-    }
-
-    // ── Rewards: honor, XP, season points ──────────────────────────────────
-    if (attackerHonorDelta > 0) {
-      await tx.player.update({
-        where: { id: playerId },
-        data: { honor: { increment: BigInt(attackerHonorDelta) } },
-      })
-    }
-    if (defenderHonorDelta > 0) {
-      await tx.player.update({
-        where: { id: defenderPlayerId! },
-        data: { honor: { increment: BigInt(defenderHonorDelta) } },
-      })
-    }
-
-    const attackerXpAmount = attackerWon
-      ? WORLD_ATTACK.captureWinXp
-      : WORLD_ATTACK.attackParticipationXp
-    const attackerXp = await grantXp(tx, {
-      playerId,
-      amount: attackerXpAmount,
-      source: 'territory',
-    })
-    if (defenderWasReal) {
-      const defenderXpAmount = defenderWon
-        ? WORLD_ATTACK.defenseWinXp
-        : WORLD_ATTACK.defenseParticipationXp
-      await grantXp(tx, {
-        playerId: defenderPlayerId!,
-        amount: defenderXpAmount,
-        source: 'territory',
-      })
-    }
-
-    let seasonPointsAwarded = 0
-    if (attackerWon) {
-      seasonPointsAwarded = await awardSeasonPointsInTx(
-        tx,
-        playerId,
-        WORLD_ATTACK.captureSeasonPoints,
-        'TERRITORY_CAPTURE',
-        { battleId: battle.id },
-      )
-    }
-    // A REAL defender who did not lose the territory held it (defense win OR
-    // a costly draw) — the same rule drives stats and the quest event below.
-    const defenderHeld = defenderWasReal && !attackerWon
-    if (defenderHeld) {
-      await awardSeasonPointsInTx(
-        tx,
-        defenderPlayerId!,
-        WORLD_ATTACK.defenseSeasonPoints,
-        'TERRITORY_DEFENSE',
-        { battleId: battle.id },
-      )
-    }
-
-    // ── Statistics (append-only counters) ──────────────────────────────────
-    const sumLosses = (rows: readonly LossRow[]): number =>
-      rows.reduce((sum, row) => sum + row.count, 0)
-    const attackerStats: Record<string, number> = { attacksLaunched: 1 }
-    if (attackerWon) attackerStats['battlesWon'] = 1
-    else if (sim.result === 'DEFENDER_WIN') attackerStats['battlesLost'] = 1
-    const attackerLostUnits = sumLosses(sim.attackerLosses)
-    if (attackerLostUnits > 0) attackerStats['unitsLost'] = attackerLostUnits
-    if (captured) attackerStats['territoriesCaptured'] = 1
-    await recordPlayerStats(tx, playerId, attackerStats)
-
-    if (defenderWasReal) {
-      const defenderStats: Record<string, number> = {}
-      if (defenderHeld) defenderStats['defensesWon'] = 1
-      else if (attackerWon) defenderStats['battlesLost'] = 1
-      const defenderLostUnits = sumLosses(sim.defenderLosses)
-      if (defenderLostUnits > 0) defenderStats['unitsLost'] = defenderLostUnits
-      if (captured) defenderStats['territoriesLost'] = 1
-      if (Object.keys(defenderStats).length > 0) {
-        await recordPlayerStats(tx, defenderPlayerId!, defenderStats)
-      }
-    }
-
-    // ── Power recalculation (armies changed) ───────────────────────────────
-    await recalculatePlayerPower(tx, playerId)
-    if (defenderWasReal) {
-      await recalculatePlayerPower(tx, defenderPlayerId!)
-    }
-
-    // ── Quest events (typed domain events — same transaction) ──────────────
-    await applyQuestEventInTx(
+    // ── Resolve through the SHARED assault pipeline (Phase 33) ──────────────
+    const resolution = await resolveTerritoryAssaultInTx({
       tx,
-      playerId,
-      { kind: 'BATTLE_FINISHED', won: attackerWon, role: 'ATTACKER', battleId: battle.id },
       now,
-    )
-    let ownedCount = 0
-    if (captured) {
-      ownedCount = await tx.territory.count({ where: { ownerPlayerId: playerId } })
-      await applyQuestEventInTx(
-        tx,
-        playerId,
-        {
-          kind: 'TERRITORY_CAPTURED',
-          territoryId: territory.id,
-          regionId: territory.region?.id ?? null,
-          ownedCount,
-          battleId: battle.id,
-        },
-        now,
-      )
-    }
-    if (defenderWasReal) {
-      await applyQuestEventInTx(
-        tx,
-        defenderPlayerId!,
-        {
-          kind: 'BATTLE_FINISHED',
-          won: defenderWon,
-          role: 'DEFENDER',
-          battleId: battle.id,
-        },
-        now,
-      )
-      if (defenderHeld) {
-        await applyQuestEventInTx(
-          tx,
-          defenderPlayerId!,
-          { kind: 'TERRITORY_DEFENDED', territoryId: territory.id, battleId: battle.id },
-          now,
-        )
-      }
-      if (captured) {
-        await applyQuestEventInTx(
-          tx,
-          defenderPlayerId!,
-          { kind: 'TERRITORY_LOST', territoryId: territory.id, battleId: battle.id },
-          now,
-        )
-      }
-    }
-
-    // ── Achievement evaluation (stats settled above) ───────────────────────
-    await evaluateAchievementsInTx(tx, playerId, {}, now)
-    if (defenderWasReal) {
-      await evaluateAchievementsInTx(tx, defenderPlayerId!, {}, now)
-    }
-
-    // ── Battle logs (per-participant reports) ──────────────────────────────
-    const attackerView = {
-      battleId: battle.id,
-      type: 'TERRITORY_ASSAULT',
-      result: sim.result,
-      myRole: 'ATTACKER',
+      seasonNumber: season.number,
+      attacker: { playerId, name: attacker.name, level: attacker.level },
+      attackerArmy: { side: attackerArmy.side, names: attackerArmy.names },
       territory: {
-        territoryId: territory.id,
+        id: territory.id,
         x: territory.x,
         y: territory.y,
         name: territory.name,
         terrain: territory.terrain,
+        ownerType: territory.ownerType,
+        ownerPlayerId: territory.ownerPlayerId,
+        strategicValue: territory.strategicValue,
+        resourceType: territory.resourceType,
+        captureCount: territory.captureCount,
+        regionId: territory.region?.id ?? null,
       },
-      opponent: {
+      defender: {
+        side: defenderSide.side,
+        names: defenderSide.names,
         playerId: defenderPlayerId,
-        name: defenderPlayerName ?? GARRISON_NAME,
+        name: defenderPlayerName,
+        wasReal: defenderWasReal,
       },
-      roundsCount: battle.roundsCount,
-      seed: battle.seed,
-      configVersion: BATTLE.version,
+      seed,
       unguarded,
-      yourArmy: attackerArmy.side.stacks,
-      yourLosses: casualtyRows(sim.attackerLosses, unitNames),
-      enemyLosses: casualtyRows(sim.defenderLosses, unitNames),
-      spoils: Object.fromEntries(
-        Object.entries(spoils).map(([resource, amount]) => [resource, amount.toString()]),
-      ),
-      captured,
-      honorDelta: attackerHonorDelta,
+      sim,
+      marchId: null,
       energySpent: WORLD_ATTACK.energyCost,
-      startedAt: now.toISOString(),
-    }
-    const logs: Array<{ playerId: string; role: 'ATTACKER' | 'DEFENDER'; content: unknown }> = [
-      { playerId, role: 'ATTACKER', content: attackerView },
-    ]
-    if (defenderWasReal) {
-      logs.push({
-        playerId: defenderPlayerId!,
-        role: 'DEFENDER',
-        content: {
-          battleId: battle.id,
-          type: 'TERRITORY_ASSAULT',
-          result: sim.result,
-          myRole: 'DEFENDER',
-          territory: {
-            territoryId: territory.id,
-            x: territory.x,
-            y: territory.y,
-            name: territory.name,
-            terrain: territory.terrain,
-          },
-          opponent: { playerId, name: attacker.name },
-          roundsCount: battle.roundsCount,
-          seed: battle.seed,
-          configVersion: BATTLE.version,
-          yourArmy: defenderSide.side.stacks,
-          yourLosses: casualtyRows(sim.defenderLosses, unitNames),
-          enemyLosses: casualtyRows(sim.attackerLosses, unitNames),
-          lostTerritory: captured,
-          honorDelta: defenderHonorDelta,
-          startedAt: now.toISOString(),
-        },
-      })
-    }
-    await tx.battleLog.createMany({
-      data: logs.map((entry) => ({
-        battleId: battle.id,
-        playerId: entry.playerId,
-        role: entry.role,
-        content: entry.content as Prisma.InputJsonValue,
-      })),
+      attackerUnitsInTransit: false,
     })
-
-    // ── Notifications (existing engine — ATTACK_RESULT) ────────────────────
-    await enqueueNotificationInTx(tx, {
-      playerId,
-      type: 'ATTACK_RESULT',
-      dedupeKey: notificationDedupeKeys.attackResult(battle.id, playerId),
-      payload: {
-        battleId: battle.id,
-        viewerRole: 'ATTACKER',
-        outcome: outcomeFor(sim.result, 'ATTACKER'),
-        opponentName: defenderPlayerName ?? GARRISON_NAME,
-        lootSummary: spoilsSummaryText(spoils),
-      },
-    })
-    if (defenderWasReal) {
-      await enqueueNotificationInTx(tx, {
-        playerId: defenderPlayerId!,
-        type: 'ATTACK_RESULT',
-        dedupeKey: notificationDedupeKeys.attackResult(battle.id, defenderPlayerId!),
-        payload: {
-          battleId: battle.id,
-          viewerRole: 'DEFENDER',
-          outcome: outcomeFor(sim.result, 'DEFENDER'),
-          opponentName: attacker.name,
-        },
-      })
-    }
+    const captured = resolution.captured
+    const captureCount = resolution.captureCount
 
     // ── Idempotency claim commits WITH the assault ─────────────────────────
     const cooldownUntil = new Date(now.getTime() + BATTLE.cooldown.attackCooldownSec * 1000)
     const response: TerritoryAttackResult = {
-      battleId: battle.id,
+      battleId: resolution.battleId,
       outcome: outcomeFor(sim.result, 'ATTACKER'),
       result: sim.result,
       territory: {
@@ -1479,7 +1617,7 @@ export async function attackTerritory(
         captureCount,
       },
       defender: { playerId: defenderPlayerId, name: defenderPlayerName ?? GARRISON_NAME },
-      roundsCount: battle.roundsCount,
+      roundsCount: resolution.roundsCount,
       seed,
       configVersion: BATTLE.version,
       casualties: {
@@ -1491,15 +1629,18 @@ export async function attackTerritory(
         defender: casualtyRows(sim.defenderSurvivors, unitNames),
       },
       spoils: Object.fromEntries(
-        Object.entries(spoils).map(([resource, amount]) => [resource, amount.toString()]),
+        Object.entries(resolution.spoils).map(([resource, amount]) => [resource, amount.toString()]),
       ),
-      honor: { attackerDelta: attackerHonorDelta, defenderDelta: defenderHonorDelta },
-      xp: {
-        attackerGained: attackerXpAmount,
-        attackerLevel: attackerXp.level,
-        attackerLevelsGained: attackerXp.levelsGained,
+      honor: {
+        attackerDelta: resolution.attackerHonorDelta,
+        defenderDelta: resolution.defenderHonorDelta,
       },
-      seasonPointsAwarded,
+      xp: {
+        attackerGained: resolution.attackerXpAmount,
+        attackerLevel: resolution.attackerXp.level,
+        attackerLevelsGained: resolution.attackerXp.levelsGained,
+      },
+      seasonPointsAwarded: resolution.seasonPointsAwarded,
       energySpent: WORLD_ATTACK.energyCost,
       cooldownUntil: cooldownUntil.toISOString(),
     }
@@ -1518,12 +1659,12 @@ export async function attackTerritory(
     }
 
     log.info('territory assault resolved', {
-      battleId: battle.id,
+      battleId: resolution.battleId,
       attackerId: playerId,
       territoryId: territory.id,
       result: sim.result,
       captured,
-      rounds: battle.roundsCount,
+      rounds: resolution.roundsCount,
       seed,
     })
 

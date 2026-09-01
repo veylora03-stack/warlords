@@ -45,6 +45,14 @@ export async function purgeTestUsersByTelegramPrefix(
         productionCollectedAt: null,
       },
     })
+    // 1b) Phase 33: marches reference battles (SetNull) and territories
+    //     (SetNull) — clear them before the battle/user rows go away.
+    await db.march.deleteMany({ where: { playerId: { in: playerIds } } })
+    await db.scoutReport.deleteMany({
+      where: {
+        OR: [{ attackerPlayerId: { in: playerIds } }, { targetPlayerId: { in: playerIds } }],
+      },
+    })
   }
   // 2) Restrict-referencing rows (audit) first, then users per row.
   await db.auditLog.deleteMany({ where: { actorUserId: { in: userIds } } })

@@ -39,6 +39,16 @@ export type QuestEvent =
     }
   | { kind: 'TERRITORY_DEFENDED'; territoryId: string; battleId: string }
   | { kind: 'TERRITORY_LOST'; territoryId: string; battleId: string }
+  // Phase 33 — march domain events (raised by march.service INSIDE the
+  // transaction that completed the march; never client-constructible):
+  | {
+      /** Fires ONCE per march, on the homecoming tx (successful completions
+       *  only — LOST marches never complete). */
+      kind: 'MARCH_COMPLETED'
+      marchId: string
+      action: 'ATTACK' | 'DEFEND' | 'SCOUT' | 'REINFORCE'
+    }
+  | { kind: 'MARCH_SCOUTED'; marchId: string; territoryId: string }
 
 export type QuestEventKind = QuestEvent['kind']
 
@@ -66,6 +76,12 @@ export function questEventKey(event: QuestEvent): string {
       return `TERRITORY_DEFENDED:battle:${event.battleId}`
     case 'TERRITORY_LOST':
       return `TERRITORY_LOST:battle:${event.battleId}`
+    case 'MARCH_COMPLETED':
+      // A march completes exactly once — the march id is the event identity.
+      return `MARCH_COMPLETED:march:${event.marchId}`
+    case 'MARCH_SCOUTED':
+      // A scout march writes exactly one report — same march-id identity.
+      return `MARCH_SCOUTED:march:${event.marchId}`
   }
 }
 
@@ -126,7 +142,12 @@ export function matchesObjective(
       return event.kind === 'TERRITORY_CAPTURED'
     case 'DEFEND_TERRITORIES':
       return event.kind === 'TERRITORY_DEFENDED'
-    // Reserved extension points (Clan, Scout): no events exist yet, so
+    case 'MARCHES_COMPLETED':
+      return event.kind === 'MARCH_COMPLETED'
+    case 'SCOUT_TARGET':
+      // Activated in Phase 33 — consumes real march-engine scout events.
+      return event.kind === 'MARCH_SCOUTED'
+    // Reserved extension points (Clan): no events exist yet, so
     // nothing can ever match — quests using them stay inert.
     default:
       return false
@@ -161,6 +182,10 @@ export function eventContribution(
     case 'TERRITORY_CAPTURED':
       return { mode, delta: 1 }
     case 'TERRITORY_DEFENDED':
+      return { mode, delta: 1 }
+    case 'MARCH_COMPLETED':
+      return { mode, delta: 1 }
+    case 'MARCH_SCOUTED':
       return { mode, delta: 1 }
     case 'RESOURCES_EARNED':
     case 'RESOURCES_SPENT': {
