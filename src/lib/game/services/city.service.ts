@@ -54,6 +54,9 @@ import {
   runEconomyTransaction,
   spendResources,
 } from '@/lib/game/services/economy.service'
+import { applyQuestEventInTx } from '@/lib/game/services/quest-events.service'
+import { recordPlayerStats } from '@/lib/game/services/stats.service'
+import { evaluateAchievementsInTx } from '@/lib/game/services/achievement.service'
 import { recalculatePlayerPower } from '@/lib/game/services/power.service'
 import { awardSeasonPointsInTx } from '@/lib/game/services/season.service'
 import { seasonPointsForBuildingLevelUp } from '@/lib/game/config/seasons'
@@ -380,6 +383,15 @@ export async function finishBuildingUpgradeInTx(
     throw new AppError('CONSTRUCTION_NOT_ACTIVE', `${def.name} construction was already claimed`)
   }
 
+  // Quest event + counter (Phase 31 — same transaction as the upgrade).
+  await recordPlayerStats(tx, playerId, { buildingsConstructed: 1 })
+  await applyQuestEventInTx(
+    tx,
+    playerId,
+    { kind: 'BUILDING_UPGRADED', buildingType: type, level: newLevel, buildingId: building.id },
+    now,
+  )
+
   // The level-up effect is live immediately: power is recomputed from the
   // real state just mutated (never hand-set).
   const power = await recalculatePlayerPower(tx, playerId)
@@ -406,6 +418,8 @@ export async function finishBuildingUpgradeInTx(
       level: newLevel,
     },
   })
+
+  await evaluateAchievementsInTx(tx, playerId, {}, now)
 
   log.info('building upgrade completed', {
     playerId,

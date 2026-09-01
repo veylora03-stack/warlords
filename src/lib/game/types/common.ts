@@ -67,7 +67,15 @@ export type TechBranch = (typeof TECH_BRANCHES)[number]
 
 // ── Quests ───────────────────────────────────────────────────────────────────
 
-export const QUEST_TYPES = ['MAIN', 'DAILY', 'WEEKLY', 'ACHIEVEMENT', 'CLAN', 'EVENT'] as const
+export const QUEST_TYPES = [
+  'MAIN',
+  'DAILY',
+  'WEEKLY',
+  'SEASONAL',
+  'ACHIEVEMENT',
+  'CLAN',
+  'EVENT',
+] as const
 export type QuestType = (typeof QUEST_TYPES)[number]
 
 export const QUEST_STATUSES = ['ACTIVE', 'COMPLETED', 'CLAIMED', 'EXPIRED'] as const
@@ -159,6 +167,7 @@ export const NOTIFICATION_TYPES = [
   'CONSTRUCTION_COMPLETE',
   'TRAINING_COMPLETE',
   'QUEST_COMPLETED',
+  'ACHIEVEMENT_UNLOCKED', // Phase 31 — permanent achievement unlock (engine-evaluated)
   'REWARD',
   'CLAN_INVITE',
   'CLAN_WAR',

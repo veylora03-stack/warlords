@@ -71,8 +71,8 @@ describe('quest catalog (server-owned reward authority)', () => {
     }
   })
 
-  it('quest types are MAIN or DAILY only', () => {
-    for (const q of QUESTS) expect(['MAIN', 'DAILY']).toContain(q.type)
+  it('quest types are catalog-blessed (Phase 31: MAIN | DAILY | WEEKLY | SEASONAL)', () => {
+    for (const q of QUESTS) expect(['MAIN', 'DAILY', 'WEEKLY', 'SEASONAL']).toContain(q.type)
   })
 
   it('every prerequisite references an existing quest (no dangling ids)', () => {
@@ -109,10 +109,13 @@ describe('quest catalog (server-owned reward authority)', () => {
     }
   })
 
-  it('repeatable quests have cooldowns; one-shot quests have none', () => {
+  it('repeatable quests reset by CYCLE (daily/weekly/seasonal); one-shots are MAIN', () => {
+    // Phase 31: the reset model is cycle-based (UTC boundaries / season end),
+    // superseding cooldown-hour resets. Repeatable quests must therefore be
+    // periodic types; MAIN quests are permanent one-shots.
     for (const q of QUESTS) {
-      if (q.repeatable) expect(q.cooldownHours).toBeGreaterThan(0)
-      else expect(q.cooldownHours).toBe(0)
+      if (q.repeatable) expect(['DAILY', 'WEEKLY', 'SEASONAL']).toContain(q.type)
+      else expect(q.type).toBe('MAIN')
     }
   })
 

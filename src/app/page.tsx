@@ -59,6 +59,7 @@ import {
   type AttackResultView,
   type AttackTargetRow,
 } from '@/features/battle'
+import { QuestsSection } from '@/features/quests'
 
 type PhaseState = 'done' | 'next' | 'planned'
 
@@ -2009,6 +2010,10 @@ export default function WarlordsConsole() {
               )}
             </CardContent>
           </Card>
+
+          {/* Quests & Achievements — live from /api/v1/quests* (Phase 31);
+              self-contained section card: hooks inside, enabled while signed in */}
+          <QuestsSection signedIn={signedIn} />
 
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">

@@ -19,7 +19,16 @@ import { ADMIN_PANEL_POLICY } from '@/lib/game/config/admin'
 const log = logger.child({ module: 'game/admin/audit' })
 
 export type AdminAuditTarget =
-  'player' | 'user' | 'clan' | 'event' | 'announcement' | 'battle' | 'staff' | 'season'
+  | 'player'
+  | 'user'
+  | 'clan'
+  | 'event'
+  | 'announcement'
+  | 'battle'
+  | 'staff'
+  | 'season'
+  | 'quest'
+  | 'player_quest'
 
 export interface AdminAuditInput {
   actorUserId: string

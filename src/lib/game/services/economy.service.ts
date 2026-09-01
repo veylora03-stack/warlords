@@ -43,6 +43,7 @@ import { logger } from '@/lib/logger'
 import { withKeyLock } from '@/lib/concurrency/mutex'
 import { withWriteRetry } from './player-registration.service'
 import type { Tx } from './player-bootstrap.service'
+import { recordLedgerActivityInTx } from './quest-events.service'
 import {
   ECONOMY_HISTORY,
   ECONOMY_RESOURCES,
@@ -493,6 +494,10 @@ export async function applyResourceDeltas(
       capped: plan.filter((e) => e.capped && !e.skipped).map((e) => e.resource),
     })
   }
+
+  // Quest/stats activity (Phase 31) — the ONE hook every ledger mutation
+  // flows through (BOOTSTRAP/ADMIN_ADJUSTMENT excluded inside the hook).
+  await recordLedgerActivityInTx(tx, playerId, plan, meta)
 
   return plan
 }

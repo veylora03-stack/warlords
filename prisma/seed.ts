@@ -13,7 +13,7 @@
  *      Re-running never duplicates (upsert by telegramId / unique keys).
  */
 
-import { PrismaClient, type Prisma } from '@prisma/client'
+import { PrismaClient, Prisma } from '@prisma/client'
 import { getEnv } from '@/config/env'
 import { logger } from '@/lib/logger'
 import { ACHIEVEMENTS } from '@/lib/game/config/achievements'
@@ -130,6 +130,7 @@ async function seedCatalogs() {
         objectiveTarget: json(q.objectiveTarget),
         reward: json(q.reward),
         prerequisiteQuestIds: json(q.prerequisiteQuestIds),
+        minLevel: q.minLevel,
         repeatable: q.repeatable,
         cooldownHours: q.cooldownHours,
         sortOrder: q.sortOrder,
@@ -142,6 +143,7 @@ async function seedCatalogs() {
         objectiveTarget: json(q.objectiveTarget),
         reward: json(q.reward),
         prerequisiteQuestIds: json(q.prerequisiteQuestIds),
+        minLevel: q.minLevel,
         repeatable: q.repeatable,
         cooldownHours: q.cooldownHours,
         sortOrder: q.sortOrder,
@@ -157,6 +159,8 @@ async function seedCatalogs() {
         title: a.title,
         description: a.description,
         category: a.category,
+        metric: a.metric,
+        meta: a.meta ? json(a.meta) : Prisma.DbNull,
         target: a.target,
         reward: json(a.reward),
       },
@@ -164,6 +168,8 @@ async function seedCatalogs() {
         title: a.title,
         description: a.description,
         category: a.category,
+        metric: a.metric,
+        meta: a.meta ? json(a.meta) : Prisma.DbNull,
         target: a.target,
         reward: json(a.reward),
       },

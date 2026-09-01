@@ -123,6 +123,11 @@ export const NOTIFICATION_PAYLOAD_SCHEMAS = {
     questName: shortText,
     rewardSummary: z.string().trim().min(1).max(200).optional(),
   }),
+  ACHIEVEMENT_UNLOCKED: z.object({
+    achievementId: idString,
+    achievementName: shortText,
+    rewardSummary: z.string().trim().min(1).max(200).optional(),
+  }),
   REWARD: z.object({
     rewardTitle: z.string().trim().min(4).max(120),
     rewardBody: z.string().trim().min(4).max(280),
@@ -190,6 +195,7 @@ export const NOTIFICATION_TYPE_CHANNELS: Record<NotificationType, readonly Notif
     CONSTRUCTION_COMPLETE: ['IN_APP'],
     TRAINING_COMPLETE: ['IN_APP'],
     QUEST_COMPLETED: ['IN_APP'],
+    ACHIEVEMENT_UNLOCKED: ['IN_APP'],
     REWARD: ['IN_APP'],
     CLAN_INVITE: ['IN_APP', 'TELEGRAM'],
     CLAN_WAR: ['IN_APP', 'TELEGRAM'],
@@ -250,6 +256,15 @@ export function renderNotification<K extends NotificationType>(
         body: p.rewardSummary
           ? `${p.questName} is done. ${p.rewardSummary}`
           : `${p.questName} is done.`,
+      }
+    }
+    case 'ACHIEVEMENT_UNLOCKED': {
+      const p = payload as NotificationPayloadMap['ACHIEVEMENT_UNLOCKED']
+      return {
+        title: `Achievement unlocked — ${p.achievementName}`,
+        body: p.rewardSummary
+          ? `${p.achievementName} is yours.${p.rewardSummary}`
+          : `${p.achievementName} is yours.`,
       }
     }
     case 'REWARD': {
@@ -329,6 +344,12 @@ export const notificationDedupeKeys = {
   construction: (buildingId: string, level: number) => `construction:${buildingId}:${level}`,
   training: (queueItemId: string) => `training:${queueItemId}`,
   quest: (playerId: string, questId: string) => `quest:${playerId}:${questId}`,
+  questCycle: (playerId: string, questId: string, cycle: string) =>
+    `quest:${playerId}:${questId}:${cycle}`,
+  questClaim: (playerId: string, questId: string, cycle: string) =>
+    `quest_claim:${playerId}:${questId}:${cycle}`,
+  achievement: (playerId: string, achievementId: string) =>
+    `achievement:${playerId}:${achievementId}`,
   clanInvite: (invitationId: string) => `clan_invite:${invitationId}`,
   clanWar: (warId: string, phase: string) => `clan_war:${warId}:${phase}`,
   worldBoss: (bossId: string, phase: string) => `world_boss:${bossId}:${phase}`,

@@ -75,6 +75,7 @@ export const GRANT_IDEMPOTENCY_TTL_SECONDS = 86_400 // 24h
 export const LEDGER_REASONS = [
   'BOOTSTRAP', // first-login faucet (player-bootstrap.service)
   'QUEST_REWARD', // quest claim payouts
+  'ACHIEVEMENT_REWARD', // achievement unlock payouts (Phase 31, auto-granted)
   'BUILDING_UPGRADE', // construction/upgrade costs (debit)
   'UNIT_TRAINING', // barracks costs (debit)
   'BATTLE_REWARD', // battle loot transfers

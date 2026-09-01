@@ -56,6 +56,9 @@ import {
   runEconomyTransaction,
   spendResources,
 } from '@/lib/game/services/economy.service'
+import { applyQuestEventInTx } from '@/lib/game/services/quest-events.service'
+import { recordPlayerStats } from '@/lib/game/services/stats.service'
+import { evaluateAchievementsInTx } from '@/lib/game/services/achievement.service'
 import { MAX_DELTA } from '@/lib/game/config/economy'
 import { recalculatePlayerPower } from '@/lib/game/services/power.service'
 import { awardSeasonPointsInTx } from '@/lib/game/services/season.service'
@@ -452,6 +455,15 @@ export async function completeTrainingInTx(
     create: { playerId, unitId: item.unitId, count: item.count },
   })
 
+  // Quest event + counter (Phase 31 — same transaction as the training).
+  await recordPlayerStats(tx, playerId, { unitsTrained: item.count })
+  await applyQuestEventInTx(
+    tx,
+    playerId,
+    { kind: 'UNITS_TRAINED', unitId: item.unitId, count: item.count, queueItemId: item.id },
+    now,
+  )
+
   // The trained units are live immediately: power recomputed from real state.
   const power = await recalculatePlayerPower(tx, playerId)
 
@@ -476,6 +488,8 @@ export async function completeTrainingInTx(
       count: item.count,
     },
   })
+
+  await evaluateAchievementsInTx(tx, playerId, {}, now)
 
   log.info('training batch completed', {
     playerId,

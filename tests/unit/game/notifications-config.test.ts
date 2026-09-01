@@ -43,7 +43,9 @@ describe('notification catalog structure', () => {
     }
     expect(NOTIFICATION_TYPES).toContain('REWARD')
     expect(NOTIFICATION_TYPES).toContain('ANNOUNCEMENT')
-    expect(NOTIFICATION_TYPES.length).toBe(12)
+    // Phase 31 adds ACHIEVEMENT_UNLOCKED to the union (permanent honors).
+    expect(NOTIFICATION_TYPES).toContain('ACHIEVEMENT_UNLOCKED')
+    expect(NOTIFICATION_TYPES.length).toBe(13)
   })
 
   it('gives every type a payload schema and a non-empty channel list with IN_APP mandatory', () => {

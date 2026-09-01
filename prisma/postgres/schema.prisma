@@ -582,13 +582,14 @@ model ScoutReport {
 /// Catalog (seeded from config).
 model Quest {
   id                  String  @id // slug
-  type                String // MAIN|DAILY|WEEKLY|ACHIEVEMENT|CLAN|EVENT
+  type                String // MAIN|DAILY|WEEKLY|SEASONAL|ACHIEVEMENT|CLAN|EVENT
   title               String
   description         String
-  objectiveType       String // BUILD_UPGRADE|TRAIN_UNITS|COLLECT_RESOURCE|WIN_BATTLES|SPEND_RESOURCE|REACH_POWER|JOIN_CLAN|SCOUT_TARGET|…
-  objectiveTarget     Json // { unitId?, buildingType?, resource?, amount } — engine-matched
-  reward              Json // { GOLD?: n, XP?: n, GEMS?: n, ITEM?: id, COMMANDER?: id, ENERGY?: n }
-  prerequisiteQuestIds Json? // chain gating for MAIN quests
+  objectiveType       String // BUILD_UPGRADE|TRAIN_UNITS|EARN_RESOURCE|WIN_BATTLES|SPEND_RESOURCE|REACH_POWER|REACH_LEVEL|… (quest-events.service)
+  objectiveTarget     Json // { unitId?, buildingType?, resource?, level?, amount } — engine-matched
+  reward              Json // { GOLD?: n, WOOD?: n, IRON?: n, FOOD?: n, CRYSTAL?: n, GEMS?: n, XP?: n, HONOR?: n }
+  prerequisiteQuestIds Json? // chain gating — all listed quests must be CLAIMED before assignment
+  minLevel            Int     @default(0) // server-side eligibility gate (player.level)
   repeatable          Boolean @default(false)
   cooldownHours       Int     @default(0)
   isActive            Boolean @default(true)
@@ -599,14 +600,18 @@ model Quest {
   playerQuests PlayerQuest[]
 
   @@index([type, sortOrder])
+  @@index([isActive]) // assignment sweep filters the active catalog subset
   @@map("quests")
 }
 
-/// Repeating quests create new rows (no unique on (playerId, questId)).
+/// Repeating quests create one row per assignment CYCLE (day/week/season) —
+/// (playerId, questId, cycle) is unique at the DB level, so assignment is
+/// inherently idempotent under concurrency (createMany skipDuplicates).
 model PlayerQuest {
   id         String    @id @default(cuid())
   playerId   String
   questId    String
+  cycle      String    @default("0") // '0'=permanent | 'YYYY-MM-DD' daily | ISO week weekly | season number seasonal
   progress   Int       @default(0)
   target     Int       @default(1)
   status     String    @default("ACTIVE") // ACTIVE|COMPLETED|CLAIMED|EXPIRED
@@ -614,11 +619,14 @@ model PlayerQuest {
   expiresAt  DateTime?
   completedAt DateTime?
   claimedAt  DateTime?
+  /// Audit: identity of the last quest event applied (kind + source ref).
+  lastEventKey String?
   updatedAt  DateTime  @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
   quest  Quest  @relation(fields: [questId], references: [id], onDelete: Restrict)
 
+  @@unique([playerId, questId, cycle])
   @@index([playerId, status])
   @@map("player_quests")
 }
@@ -629,6 +637,11 @@ model Achievement {
   description String
   category    String // PROGRESS|MILITARY|ECONOMY|SOCIAL|COLLECTION
   target      Int    @default(1)
+  /// What the target is measured against — evaluated server-side ONLY:
+  /// STAT (Player.stats[meta.statKey]) | BUILDING_LEVEL | PLAYER_LEVEL |
+  /// PLAYER_POWER | SEASON_TOP (final rank ≥ settlement, meta.rank).
+  metric      String @default("STAT")
+  meta        Json?  // metric qualifier: { statKey } | { buildingType } | { rank }
   reward      Json
   isActive    Boolean @default(true)
   createdAt   DateTime @default(now())

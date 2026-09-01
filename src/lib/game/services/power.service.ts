@@ -16,6 +16,7 @@
  */
 
 import type { Tx } from './player-bootstrap.service'
+import { applyQuestEventInTx } from './quest-events.service'
 import type { PowerBreakdown } from '@/lib/game/config/power'
 import {
   computeBuildingPower,
@@ -96,5 +97,8 @@ export async function recalculatePlayerPower(tx: Tx, playerId: string): Promise<
     where: { id: playerId },
     data: { power: BigInt(power.total) },
   })
+  // Quest event (Phase 31): REACH_POWER objectives consume the fresh value
+  // (SET mode — monotonic). Same transaction as the mutation that caused it.
+  await applyQuestEventInTx(tx, playerId, { kind: 'POWER_REACHED', power: power.total })
   return power.total
 }

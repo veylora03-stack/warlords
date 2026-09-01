@@ -63,6 +63,9 @@ export const ADMIN_SCOPES = [
   'season.settle',
   // Notifications ops (Phase 22)
   'notifications.drain',
+  // Quests ops (Phase 31 — enable/disable, inspect, reset, grant/revoke)
+  'quests.view',
+  'quests.manage',
 ] as const
 
 export type AdminScope = (typeof ADMIN_SCOPES)[number]
@@ -84,6 +87,7 @@ export const ADMIN_ROLE_SCOPES: Record<AdminRole, readonly AdminScope[]> = {
     'announcements.view',
     'announcements.create',
     'audit.view',
+    'quests.view',
   ],
   ADMIN: ADMIN_SCOPES,
 }

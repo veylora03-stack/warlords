@@ -69,6 +69,11 @@ export const ERROR_CODES = {
   CLAN_HAS_WARS: 409,
   CONFIRMATION_REQUIRED: 400,
   ANNOUNCEMENT_INACTIVE: 409,
+  // Quest engine (Phase 31)
+  QUEST_NOT_COMPLETED: 409,
+  QUEST_ALREADY_CLAIMED: 409,
+  QUEST_EXPIRED: 409,
+  QUEST_REWARD_INVALID: 500,
   // Security hardening (Phase 23)
   /** Optimistic-CAS credit could not settle within its bounded retry budget. */
   RESOURCE_WALLET_CONFLICT: 409,

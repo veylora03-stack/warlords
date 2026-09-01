@@ -53,6 +53,8 @@ import { recalculatePlayerPower } from './power.service'
 import { grantXp } from './progression.service'
 import { awardSeasonPointsInTx, resolveSeasonStateInTx } from './season.service'
 import { recordPlayerStats } from './stats.service'
+import { applyQuestEventInTx } from './quest-events.service'
+import { evaluateAchievementsInTx } from './achievement.service'
 import { enqueueNotificationInTx } from './notification.service'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import { simulateBattle } from '@/lib/game/engine/battle/simulator'
@@ -712,6 +714,24 @@ export async function attack(
     // ── Power recalculation (army changed on both sides) ────────────────────
     await recalculatePlayerPower(tx, attacker.id)
     await recalculatePlayerPower(tx, target.id)
+
+    // ── Quest events (Phase 31 — same transaction as the battle) ────────────
+    await applyQuestEventInTx(
+      tx,
+      attacker.id,
+      { kind: 'BATTLE_FINISHED', won: attackerWon, role: 'ATTACKER', battleId: battle.id },
+      now,
+    )
+    await applyQuestEventInTx(
+      tx,
+      target.id,
+      { kind: 'BATTLE_FINISHED', won: defenderWon, role: 'DEFENDER', battleId: battle.id },
+      now,
+    )
+
+    // ── Achievement evaluation (stats/level/power settled above) ────────────
+    await evaluateAchievementsInTx(tx, attacker.id, {}, now)
+    await evaluateAchievementsInTx(tx, target.id, {}, now)
 
     // ── Battle logs (per-participant pre-formatted reports) ─────────────────
     const attackerView = {

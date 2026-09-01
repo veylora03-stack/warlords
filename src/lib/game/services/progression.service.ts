@@ -21,6 +21,7 @@ import {
   type XpGainResult,
 } from '@/lib/game/config/leveling'
 import { enqueueNotificationInTx } from '@/lib/game/services/notification.service'
+import { applyQuestEventInTx } from './quest-events.service'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 
 const log = logger.child({ module: 'game/progression' })
@@ -102,6 +103,10 @@ export async function grantXp(tx: Tx, input: GrantXpInput): Promise<GrantXpResul
   const newLevel = gain.level
 
   if (gain.leveledUp) {
+    // Quest event (Phase 31): REACH_LEVEL objectives consume the new level
+    // (SET mode — monotonic) inside the same transaction as the grant.
+    await applyQuestEventInTx(tx, playerId, { kind: 'LEVEL_REACHED', level: newLevel })
+
     // Level-up notice rides the notification engine's queue (Phase 22) —
     // dedupe key carries the EVENT IDENTITY (player + reached level), so a
     // level can never announce twice.
