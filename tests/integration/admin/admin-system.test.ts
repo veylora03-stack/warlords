@@ -205,7 +205,15 @@ afterAll(async () => {
       leaderPlayerId: { in: [adminPlayerId, moderatorPlayerId, victimPlayerId, plainPlayerId] },
     },
   })
-  await db.user.deleteMany({ where: { telegramId: { in: tgIds } } })
+  {
+    const tgUsers = await db.user.findMany({
+      where: { telegramId: { in: tgIds } },
+      select: { id: true },
+    })
+    for (const tgUser of tgUsers) {
+      await db.user.delete({ where: { id: tgUser.id } }).catch(() => undefined)
+    }
+  }
 })
 
 // ── 1. RBAC enforcement ──────────────────────────────────────────────────────
@@ -667,8 +675,16 @@ describe('announcements (create → broadcast fan-out, audited)', () => {
     })
     expect(queued.length).toBe(1)
 
-    // The worker renders + delivers the inbox rows.
-    await drainNotificationQueue({ workerId: 'admin-test', telegramConfig: { token: null } })
+    // The worker renders + delivers the inbox rows. The queue may hold rows
+    // from other suites in the shared sandbox DB — drain until it is EMPTY
+    // (bounded), not just one 25-row batch.
+    for (let tick = 0; tick < 50; tick++) {
+      const result = await drainNotificationQueue({
+        workerId: 'admin-test',
+        telegramConfig: { token: null },
+      })
+      if (result.claimed === 0) break
+    }
     const notifications = await db.notification.findMany({
       where: { type: 'ANNOUNCEMENT', playerId: victimPlayerId },
     })

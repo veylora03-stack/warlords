@@ -367,11 +367,39 @@ export async function executeSettlementInTx(
         break
       }
       case 'TERRITORY_OWNERSHIP': {
-        const result = await tx.territory.updateMany({
-          where: { ownerPlayerId: { not: null } },
-          data: { ownerPlayerId: null, lastCapturedAt: null },
+        // Phase 32: strip CONQUERED territories only — player capitals are
+        // permanent (server rule) and survive every settlement. Each strip
+        // lands an append-only TerritoryHistory row (reason SEASON_RESET) so
+        // the ownership audit trail stays complete across seasons.
+        const stripped = await tx.territory.findMany({
+          where: { ownerPlayerId: { not: null }, isCapital: false },
+          select: { id: true, ownerPlayerId: true, ownerType: true },
         })
-        wipe.territoriesStripped = result.count
+        if (stripped.length > 0) {
+          await tx.territory.updateMany({
+            where: { id: { in: stripped.map((row) => row.id) } },
+            data: {
+              ownerPlayerId: null,
+              ownerType: 'NONE',
+              status: 'UNCLAIMED',
+              lastCapturedAt: null,
+              productionCollectedAt: null,
+            },
+          })
+          await tx.territoryHistory.createMany({
+            data: stripped.map((row) => ({
+              territoryId: row.id,
+              seasonNumber: latest.number,
+              previousOwnerType: row.ownerType === 'PLAYER' ? 'PLAYER' : 'NONE',
+              previousOwnerId: row.ownerPlayerId,
+              newOwnerType: 'NONE',
+              newOwnerId: null,
+              battleId: null,
+              reason: 'SEASON_RESET',
+            })),
+          })
+        }
+        wipe.territoriesStripped = stripped.length
         break
       }
       case 'SEASON_WALLETS': {

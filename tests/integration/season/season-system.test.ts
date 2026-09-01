@@ -187,7 +187,15 @@ afterAll(async () => {
   })
   await db.auditLog.deleteMany({ where: { actorUserId: adminUserId } })
   await db.adminUser.deleteMany({ where: { userId: adminUserId } })
-  await db.user.deleteMany({ where: { telegramId: { in: tgIds } } })
+  {
+    const tgUsers = await db.user.findMany({
+      where: { telegramId: { in: tgIds } },
+      select: { id: true },
+    })
+    for (const tgUser of tgUsers) {
+      await db.user.delete({ where: { id: tgUser.id } }).catch(() => undefined)
+    }
+  }
 })
 
 // ── 1. Season view ───────────────────────────────────────────────────────────
@@ -514,7 +522,10 @@ describe('POST /api/v1/admin/season/settle/execute — the transactional reset',
     // The worker processes a bounded batch per tick — drain until quiescent
     // (the production scheduler re-ticks; a QA drain must do the same).
     for (let tick = 0; tick < 10; tick++) {
-      const ticked = await drainNotificationQueue({ batchSize: 50 })
+      const ticked = await drainNotificationQueue({
+        batchSize: 50,
+        telegramConfig: { token: null },
+      })
       if (ticked.claimed === 0) break
     }
     for (let i = 0; i < players.length; i++) {

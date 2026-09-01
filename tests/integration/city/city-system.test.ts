@@ -58,6 +58,7 @@ import {
 import { STARTER_WALLET } from '../../../src/lib/game/config/starter'
 import { POWER } from '../../../src/lib/game/config/power'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -248,7 +249,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100007' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100007')
 })
 
 // ── 1. City view (read API) ─────────────────────────────────────────────────

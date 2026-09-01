@@ -34,6 +34,7 @@ import { evaluateAchievementsInTx } from '../../src/lib/game/services/achievemen
 import { recordPlayerStats } from '../../src/lib/game/services/stats.service'
 import { runEconomyTransaction } from '../../src/lib/game/services/economy.service'
 import { BATTLE } from '../../src/lib/game/config/battle'
+import { purgeTestUsersByTelegramPrefix } from '../helpers/cleanup'
 
 const BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN']
 const JWT_SECRET = process.env['JWT_SECRET']
@@ -94,7 +95,7 @@ async function purge(): Promise<void> {
     })
     await db.idempotencyKey.deleteMany({ where: { playerId: { in: ids } } })
   }
-  await db.user.deleteMany({ where: { telegramId: { startsWith: TG_RANGE } } })
+  await purgeTestUsersByTelegramPrefix(db, TG_RANGE)
 }
 
 beforeAll(async () => {

@@ -35,6 +35,7 @@ import { resolveAuthConfig } from '../../../src/lib/auth'
 import { getEnv } from '../../../src/config/env'
 import { getWalletBalances } from '../../../src/lib/game/services/economy.service'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -124,7 +125,7 @@ async function register(telegramId: string): Promise<{
 beforeAll(async () => {
   // Self-healing: a previous crashed run may have leaked identities in this
   // range (drained wallets would poison the concurrency assertions).
-  await db.user.deleteMany({ where: { telegramId: { startsWith: TG_PREFIX } } })
+  await purgeTestUsersByTelegramPrefix(db, TG_PREFIX)
 
   const main = await register(nextTgId())
   playerToken = main.token
@@ -137,7 +138,15 @@ afterAll(async () => {
     where: { player: { user: { telegramId: { in: tgIds } } } },
   })
   await db.trainingQueueItem.deleteMany({ where: { playerId } })
-  await db.user.deleteMany({ where: { telegramId: { in: tgIds } } })
+  {
+    const tgUsers = await db.user.findMany({
+      where: { telegramId: { in: tgIds } },
+      select: { id: true },
+    })
+    for (const tgUser of tgUsers) {
+      await db.user.delete({ where: { id: tgUser.id } }).catch(() => undefined)
+    }
+  }
 })
 
 // ── helpers ──────────────────────────────────────────────────────────────────

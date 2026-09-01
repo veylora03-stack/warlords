@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadEnv } from '../../../src/config/env'
 
@@ -37,7 +37,13 @@ describe('.env.example documents the full environment contract', () => {
     const env = loadEnv({ DATABASE_URL: 'file:./db/custom.db' })
     const template = readRepo('.env.example')
     const appKeys = Object.keys(env).filter(
-      (k) => k !== 'isDev' && k !== 'isProd' && k !== 'isTest',
+      (k) =>
+        k !== 'isDev' &&
+        k !== 'isProd' &&
+        k !== 'isTest' &&
+        // derived ops flag — the RAW key NOTIFICATION_WORKER_DISABLED is
+        // what .env.example documents
+        k !== 'notificationWorkerDisabled',
     )
     expect(appKeys.length).toBeGreaterThanOrEqual(8)
     for (const key of appKeys) {
@@ -76,16 +82,32 @@ describe('prisma/postgres is the faithful production twin of the dev schema', ()
   })
 })
 
-describe('the committed PostgreSQL baseline covers the whole schema', () => {
-  const baseline = readRepo('prisma/postgres/migrations/00000000000000_init/migration.sql')
+describe('the committed PostgreSQL migrations cover the whole schema', () => {
+  // Deploy semantics: the baseline PLUS every committed incremental migration
+  // (applied in filename order) must reproduce the schema contract. Phase 32
+  // added world_regions/territory_history through an incremental migration,
+  // exactly as the migration system intends.
+  const MIGRATIONS_DIR = 'prisma/postgres/migrations'
+  const baseline = readRepo(`${MIGRATIONS_DIR}/00000000000000_init/migration.sql`)
+  const incremental = readdirSync(join(ROOT, MIGRATIONS_DIR))
+    .filter((entry) => /^\d{14}_/.test(entry) && entry !== '00000000000000_init')
+    .sort()
+    .map((entry) => readRepo(`${MIGRATIONS_DIR}/${entry}/migration.sql`))
+    .join('\n')
+  const applied = `${baseline}\n${incremental}`
   const schema = readRepo('prisma/postgres/schema.prisma')
 
-  it('creates every @@map table the schema declares', () => {
+  it('creates every @@map table the schema declares (baseline + committed migrations)', () => {
     const mapped = [...schema.matchAll(/@@map\("([^"]+)"\)/g)].map((m) => m[1]!)
     expect(mapped.length).toBeGreaterThan(30)
     for (const table of mapped) {
-      expect(baseline).toContain(`CREATE TABLE "${table}"`)
+      expect(applied).toContain(`CREATE TABLE "${table}"`)
     }
+  })
+
+  it('creates the Phase 32 world tables through the committed incremental migration', () => {
+    expect(incremental).toContain('CREATE TABLE "world_regions"')
+    expect(incremental).toContain('CREATE TABLE "territory_history"')
   })
 
   it('carries the players honor index (regression: display-ghost @@index corruption)', () => {

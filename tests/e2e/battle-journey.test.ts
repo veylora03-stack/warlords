@@ -31,6 +31,7 @@ import { ensureActiveSeasonInTx } from '../../src/lib/game/services/season.servi
 import { runEconomyTransaction } from '../../src/lib/game/services/economy.service'
 import { BATTLE } from '../../src/lib/game/config/battle'
 import type { ApiEnvelope } from '../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -129,7 +130,7 @@ async function purgeRange(): Promise<void> {
     })
     await db.idempotencyKey.deleteMany({ where: { playerId: { in: ids } } })
   }
-  await db.user.deleteMany({ where: { telegramId: { startsWith: TG_PREFIX } } })
+  await purgeTestUsersByTelegramPrefix(db, TG_PREFIX)
 }
 
 // ── Journey ──────────────────────────────────────────────────────────────────
@@ -295,7 +296,7 @@ describe('E2E — battle journey (attack → result → rewards → ranking → 
   })
 
   it('step 8 — both participants receive their ATTACK_RESULT notification', async () => {
-    await drainNotificationQueue()
+    await drainNotificationQueue({ telegramConfig: { token: null } })
     const attackerNotifs = await call<{
       notifications: Array<{ type: string; title: string }>
     }>(notificationsGet, attacker.token, '/api/v1/player/notifications')

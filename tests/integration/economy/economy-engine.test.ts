@@ -47,6 +47,7 @@ import {
 import { RESOURCE_CAPS } from '../../../src/lib/game/config/economy'
 import { STARTER_WALLET } from '../../../src/lib/game/config/starter'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -220,7 +221,7 @@ afterAll(async () => {
   // Audit rows (Restrict FK to actor) → idempotency keys (playerId, no FK) → users (cascade).
   await db.auditLog.deleteMany({ where: { actorUserId: adminUserId } })
   await db.idempotencyKey.deleteMany({ where: { playerId: { in: [dupPlayerId, rollPlayerId] } } })
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100005' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100005')
 })
 
 // ── 1. Wallet view (read API) ────────────────────────────────────────────────

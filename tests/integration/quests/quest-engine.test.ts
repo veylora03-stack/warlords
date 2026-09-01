@@ -63,6 +63,7 @@ import {
   getWalletBalances,
 } from '../../../src/lib/game/services/economy.service'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 const BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN']
 const JWT_SECRET = process.env['JWT_SECRET']
@@ -280,7 +281,7 @@ async function purgeTestRange(): Promise<void> {
   await db.playerQuest.deleteMany({ where: { questId: 'test-seasonal-capture' } })
   await db.quest.deleteMany({ where: { id: 'test-seasonal-capture' } })
   await db.season.deleteMany({ where: { name: 'Boundary Season' } })
-  await db.user.deleteMany({ where: { telegramId: { startsWith: TG_RANGE_PREFIX } } })
+  await purgeTestUsersByTelegramPrefix(db, TG_RANGE_PREFIX)
 }
 
 beforeAll(async () => {

@@ -31,6 +31,7 @@ import { createBotRouter } from '../../../src/lib/telegram/bot'
 import { TelegramDeliveryError } from '../../../src/lib/telegram/send-message'
 import { db } from '../../../src/lib/db'
 import { APP_VERSION } from '../../../src/config/app'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 const SECRET = 'test-webhook-secret-91000266'
 const TOKEN = '123456:TEST-TOKEN-NOT-REAL'
@@ -180,7 +181,7 @@ describe('webhook command flow (real router, real DB loaders, captured transport
 
   beforeAll(async () => {
     // self-healing isolated identity range (same policy as other suites)
-    await db.user.deleteMany({ where: { telegramId: { startsWith: TG_RANGE } } })
+    await purgeTestUsersByTelegramPrefix(db, TG_RANGE)
     await db.user.create({
       data: {
         telegramId: TG,
@@ -196,7 +197,7 @@ describe('webhook command flow (real router, real DB loaders, captured transport
   })
 
   afterAll(async () => {
-    await db.user.deleteMany({ where: { telegramId: { startsWith: TG_RANGE } } })
+    await purgeTestUsersByTelegramPrefix(db, TG_RANGE)
   })
 
   it('/start answers the sender chat with the Mini App keyboard', async () => {

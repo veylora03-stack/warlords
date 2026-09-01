@@ -27,6 +27,18 @@ export type QuestEvent =
   | { kind: 'RESOURCES_SPENT'; amounts: Record<string, number>; sourceRef: string }
   | { kind: 'POWER_REACHED'; power: number }
   | { kind: 'LEVEL_REACHED'; level: number }
+  // Phase 32 — territory domain events (raised by world.service INSIDE the
+  // transaction that changed ownership; never client-constructible):
+  | {
+      kind: 'TERRITORY_CAPTURED'
+      territoryId: string
+      regionId: string | null
+      /** Server-computed territory count of the capturer AFTER the capture. */
+      ownedCount: number
+      battleId: string
+    }
+  | { kind: 'TERRITORY_DEFENDED'; territoryId: string; battleId: string }
+  | { kind: 'TERRITORY_LOST'; territoryId: string; battleId: string }
 
 export type QuestEventKind = QuestEvent['kind']
 
@@ -46,6 +58,14 @@ export function questEventKey(event: QuestEvent): string {
       return `POWER_REACHED:${event.power}`
     case 'LEVEL_REACHED':
       return `LEVEL_REACHED:${event.level}`
+    case 'TERRITORY_CAPTURED':
+      // One battle captures at most one territory — the battle id is the
+      // event identity, so idempotent replays can never re-advance progress.
+      return `TERRITORY_CAPTURED:battle:${event.battleId}`
+    case 'TERRITORY_DEFENDED':
+      return `TERRITORY_DEFENDED:battle:${event.battleId}`
+    case 'TERRITORY_LOST':
+      return `TERRITORY_LOST:battle:${event.battleId}`
   }
 }
 
@@ -99,8 +119,15 @@ export function matchesObjective(
       return event.kind === 'POWER_REACHED'
     case 'REACH_LEVEL':
       return event.kind === 'LEVEL_REACHED'
-    // Reserved extension points (World/Territory, Clan, Scout): no events
-    // exist yet, so nothing can ever match — quests using them stay inert.
+    case 'CAPTURE_TERRITORIES':
+      return event.kind === 'TERRITORY_CAPTURED'
+    case 'CONTROL_TERRITORIES':
+      // SET objective — progress snaps to the capturer's CURRENT owned count.
+      return event.kind === 'TERRITORY_CAPTURED'
+    case 'DEFEND_TERRITORIES':
+      return event.kind === 'TERRITORY_DEFENDED'
+    // Reserved extension points (Clan, Scout): no events exist yet, so
+    // nothing can ever match — quests using them stay inert.
     default:
       return false
   }
@@ -120,6 +147,7 @@ export function eventContribution(
   if (mode === 'SET') {
     if (event.kind === 'POWER_REACHED') return { mode, value: event.power }
     if (event.kind === 'LEVEL_REACHED') return { mode, value: event.level }
+    if (event.kind === 'TERRITORY_CAPTURED') return { mode, value: event.ownedCount }
     throw new Error(`SET objective ${objectiveType} cannot consume event ${event.kind}`)
   }
   // INCREMENT
@@ -130,6 +158,10 @@ export function eventContribution(
       return { mode, delta: 1 }
     case 'UNITS_TRAINED':
       return { mode, delta: event.count }
+    case 'TERRITORY_CAPTURED':
+      return { mode, delta: 1 }
+    case 'TERRITORY_DEFENDED':
+      return { mode, delta: 1 }
     case 'RESOURCES_EARNED':
     case 'RESOURCES_SPENT': {
       const resource = typeof target.resource === 'string' ? target.resource : null

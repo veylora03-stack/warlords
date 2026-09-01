@@ -22,6 +22,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
 import { db } from '../../../src/lib/db'
 import { applyQuestEventInTx } from '../../../src/lib/game/services/quest-events.service'
 import { runEconomyTransaction } from '../../../src/lib/game/services/economy.service'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 const TG_RANGE = '9100039'
 const LOAD_QUEST_ID = 'load-test-events'
@@ -43,7 +44,7 @@ async function purge(): Promise<void> {
   }
   await db.playerQuest.deleteMany({ where: { questId: LOAD_QUEST_ID } })
   await db.quest.deleteMany({ where: { id: LOAD_QUEST_ID } })
-  await db.user.deleteMany({ where: { telegramId: { startsWith: TG_RANGE } } })
+  await purgeTestUsersByTelegramPrefix(db, TG_RANGE)
 }
 
 beforeAll(async () => {

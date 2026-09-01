@@ -48,6 +48,7 @@ import { ENERGY } from '../../../src/lib/game/config/energy'
 import { STARTER_WALLET } from '../../../src/lib/game/config/starter'
 import { emptyPlayerStats } from '../../../src/lib/game/config/stats'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -160,7 +161,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Cascades remove players, wallets, cities, buildings, units, sessions…
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100003' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100003')
   await db.$disconnect()
 })
 

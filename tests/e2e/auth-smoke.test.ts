@@ -10,6 +10,7 @@
 import { describe, it, expect, afterAll } from 'bun:test'
 import { createHmac, createHash } from 'node:crypto'
 import type { ApiEnvelope } from '../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../helpers/cleanup'
 
 const BASE_URL = process.env['E2E_BASE_URL'] ?? 'http://localhost:3000'
 const BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN']
@@ -125,7 +126,7 @@ describe.skipIf(!serverReachable)('GET /api/v1/auth/me — guard contract', () =
     // Clean the e2e identity from the dev DB (sessions/players cascade).
     if (!serverReachable) return
     const { db } = await import('../../src/lib/db')
-    await db.user.deleteMany({ where: { telegramId: { startsWith: '9100002' } } })
+    await purgeTestUsersByTelegramPrefix(db, '9100002')
     await db.$disconnect()
   })
 })

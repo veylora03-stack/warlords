@@ -47,6 +47,13 @@ export function startNotificationWorker(): void {
   if (globalRef.__warlordsNotificationWorkerStarted) return
   const env = getEnvSafe()
   if (env?.isTest) return
+  // Ops kill-switch (env.ts): a dedicated worker instance or a dev/QA server
+  // that must not compete with direct-drain tests sets
+  // NOTIFICATION_WORKER_DISABLED=true.
+  if (env?.notificationWorkerDisabled) {
+    log.warn('notification worker disabled by NOTIFICATION_WORKER_DISABLED')
+    return
+  }
   globalRef.__warlordsNotificationWorkerStarted = true
 
   const workerId = `worker:${process.pid}:${randomUUID().slice(0, 8)}`

@@ -392,6 +392,9 @@ describe('POST /api/v1/auth/dev-impersonate (Flow B guards)', () => {
 
 afterAll(async () => {
   // Audit rows (Restrict FK) must go before users; sessions cascade.
+  // Bulk user deleteMany can transiently violate FK ordering under the
+  // SQLite foreign-key emulation when several users are removed in one
+  // statement — delete per row (cheap at test scale, fully reliable).
   const testUsers = await db.user.findMany({
     where: { telegramId: { startsWith: '910000' } },
     select: { id: true },
@@ -399,7 +402,9 @@ afterAll(async () => {
   const ids = testUsers.map((u) => u.id)
   if (ids.length > 0) {
     await db.auditLog.deleteMany({ where: { actorUserId: { in: ids } } })
-    await db.user.deleteMany({ where: { id: { in: ids } } })
+    for (const id of ids) {
+      await db.user.delete({ where: { id } }).catch(() => undefined)
+    }
   }
   await db.$disconnect()
 })

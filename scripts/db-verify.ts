@@ -151,11 +151,13 @@ async function main(): Promise<number> {
   }>
   const journalMode = mode[0]?.journal_mode
   if (journalMode !== 'wal') {
-    await prisma.$executeRawUnsafe(`PRAGMA journal_mode=WAL`)
-    const after = (await prisma.$queryRawUnsafe(`PRAGMA journal_mode`)) as Array<{
+    // PRAGMA journal_mode=WAL RETURNS the new mode as a row — Prisma rejects
+    // result-returning statements on $executeRaw (P2010), so the switch goes
+    // through $queryRawUnsafe and asserts the returned mode.
+    const switched = (await prisma.$queryRawUnsafe(`PRAGMA journal_mode=WAL`)) as Array<{
       journal_mode: string
     }>
-    if (after[0]?.journal_mode !== 'wal') {
+    if (switched[0]?.journal_mode !== 'wal') {
       push('V6-wal', `journal_mode is '${journalMode}' and could not be switched to WAL`)
     } else {
       console.log('  V6-wal: journal_mode upgraded DELETE → WAL (persistent)')

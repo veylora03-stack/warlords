@@ -466,25 +466,97 @@ model Territory {
   id              String   @id @default(cuid())
   x               Int
   y               Int
-  type            String // PLAYER_CITY|NPC_VILLAGE|RESOURCE_ZONE|MINE|FOREST|MOUNTAIN|BOSS_ZONE|SPECIAL
+  type            String // PLAYER_CITY|NPC_VILLAGE|RESOURCE_ZONE|MINE|FOREST|MOUNTAIN|BOSS_ZONE|SPECIAL — Phase 32: PLAYER_CITY (capital) | NPC_VILLAGE (garrison cell) | RESOURCE_ZONE (producing cell) | SPECIAL (locked site)
+  /// World/region membership (Phase 32). Nullable only for pre-world legacy
+  /// rows; ensureWorldGenerated backfills every cell deterministically.
+  regionId        String?
+  /// Deterministic display name from the region name pools (generator).
+  name            String?
+  /// TERRAIN_TYPES (config/world.ts) — combat + production modifiers resolve
+  /// from server config ONLY, never from client input.
+  terrain         String   @default("PLAINS")
+  /// UNCLAIMED | CONTROLLED | LOCKED (Phase 32 — capitals are CONTROLLED and
+  /// protected by the server-side isCapital rule, not a separate state).
+  status          String   @default("UNCLAIMED")
+  /// NONE | PLAYER (clan ownership is a future extension of this column).
+  ownerType       String   @default("NONE")
   ownerPlayerId   String?
   cityId          String?  @unique // 1:1 anchor for player capitals
+  /// Capital territories are never attackable and survive season settlement.
+  isCapital       Boolean  @default(false)
   defenseStrength Int      @default(0)
   production      Json? // bonus yields when held
   strategicValue  Int      @default(0)
+  /// What a controlled territory produces (economy resource) and how much per
+  /// hour (server config units) — collected lazily through the ledger.
+  resourceType    String?
+  productionRate  Int      @default(0)
+  productionCollectedAt DateTime?
+  captureCount    Int      @default(0)
   lastCapturedAt  DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  ownerPlayer  Player?       @relation("TerritoryOwner", fields: [ownerPlayerId], references: [id], onDelete: SetNull)
-  city         City?         @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  ownerPlayer  Player?            @relation("TerritoryOwner", fields: [ownerPlayerId], references: [id], onDelete: SetNull)
+  city         City?              @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  region       Region?            @relation(fields: [regionId], references: [id], onDelete: SetNull)
   marches      March[]
   battles      Battle[]
   scoutReports ScoutReport[]
+  history      TerritoryHistory[]
 
   @@unique([x, y])
   @@index([ownerPlayerId])
+  @@index([regionId])
+  @@index([status])
   @@map("territories")
+}
+
+/// Persistent world region — a rectangular block of the deterministic grid.
+/// Regions exist so the map can be named, grouped and (de)activated without
+/// touching territory rows; bounds are the ONLY geometry stored (derived
+/// adjacency would be redundant). Seeded once by ensureWorldGenerated.
+model Region {
+  id        String   @id // slug "r{col}-{row}"
+  name      String
+  minX      Int
+  maxX      Int
+  minY      Int
+  maxY      Int
+  metadata  Json? // { seed, index } — generation audit, never gameplay authority
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  territories Territory[]
+
+  @@unique([minX, minY]) // non-overlapping grid blocks — one region per origin
+  @@index([isActive])
+  @@map("world_regions")
+}
+
+/// APPEND-ONLY ownership record for territories. Written inside the same
+/// transaction as every ownership transition (capture, season reset, admin
+/// action, spawn). Owner ids are PLAIN columns (no FK): history must survive
+/// owner deletion untouched — immutability over referential coupling.
+model TerritoryHistory {
+  id                String   @id @default(cuid())
+  territoryId       String
+  seasonNumber      Int
+  previousOwnerType String   @default("NONE") // NONE | PLAYER
+  previousOwnerId   String?
+  newOwnerType      String   @default("NONE") // NONE | PLAYER
+  newOwnerId        String?
+  battleId          String?
+  /// CAPTURE | SEASON_RESET | ADMIN | SPAWN | WORLD_INIT (config catalog).
+  reason            String
+  createdAt         DateTime @default(now())
+
+  territory Territory @relation(fields: [territoryId], references: [id], onDelete: Restrict)
+
+  @@index([territoryId, createdAt])
+  @@index([seasonNumber])
+  @@map("territory_history")
 }
 
 /// One engagement. Deterministic: (seed, configVersion, inputs) ⇒ identical outcome.

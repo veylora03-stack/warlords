@@ -74,6 +74,13 @@ export const ERROR_CODES = {
   QUEST_ALREADY_CLAIMED: 409,
   QUEST_EXPIRED: 409,
   QUEST_REWARD_INVALID: 500,
+  // World map + territory engine (Phase 32)
+  TERRITORY_CAPITAL_PROTECTED: 403,
+  TERRITORY_NOT_ADJACENT: 400,
+  TERRITORY_LOCKED: 409,
+  TERRITORY_OWNED: 400,
+  TERRITORY_NOT_COLLECTIBLE: 409,
+  REGION_NOT_FOUND: 404,
   // Security hardening (Phase 23)
   /** Optimistic-CAS credit could not settle within its bounded retry budget. */
   RESOURCE_WALLET_CONFLICT: 409,

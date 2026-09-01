@@ -136,7 +136,15 @@ describe.skipIf(!serverReachable)('GET /api/v1/player/* — live guard contract'
   afterAll(async () => {
     if (!serverReachable) return
     const { db } = await import('../../src/lib/db')
-    await db.user.deleteMany({ where: { telegramId: { startsWith: '9100004' } } })
+    // Per-row delete: bulk deleteMany can transiently violate FK ordering
+    // under the SQLite foreign-key emulation (same artifact as auth-flow).
+    const users = await db.user.findMany({
+      where: { telegramId: { startsWith: '9100004' } },
+      select: { id: true },
+    })
+    for (const user of users) {
+      await db.user.delete({ where: { id: user.id } }).catch(() => undefined)
+    }
     await db.$disconnect()
   })
 })

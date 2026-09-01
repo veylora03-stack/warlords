@@ -79,6 +79,8 @@ export const LEDGER_REASONS = [
   'BUILDING_UPGRADE', // construction/upgrade costs (debit)
   'UNIT_TRAINING', // barracks costs (debit)
   'BATTLE_REWARD', // battle loot transfers
+  'TERRITORY_CAPTURE', // territory assault spoils (Phase 32, credit)
+  'TERRITORY_PRODUCTION', // lazy territory production collection (Phase 32, credit)
   'MARKET_PURCHASE', // player-market buys (debit buyer)
   'MARKET_SALE', // player-market sales (credit seller)
   'ADMIN_ADJUSTMENT', // audited support/ops corrections (either sign)

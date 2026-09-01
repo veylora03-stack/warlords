@@ -53,6 +53,7 @@ import { runEconomyTransaction } from '../../../src/lib/game/services/economy.se
 import { BATTLE } from '../../../src/lib/game/config/battle'
 import { STARTER_WALLET } from '../../../src/lib/game/config/starter'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -252,7 +253,7 @@ async function purgeTestRange(): Promise<void> {
     })
     await db.idempotencyKey.deleteMany({ where: { playerId: { in: playerIds } } })
   }
-  await db.user.deleteMany({ where: { telegramId: { startsWith: prefix } } })
+  await purgeTestUsersByTelegramPrefix(db, prefix)
   createdIds.length = 0
 }
 
@@ -533,7 +534,7 @@ describe('battle system — attack API', () => {
     )
 
     // Notifications delivered to BOTH participants after the drain
-    await drainNotificationQueue()
+    await drainNotificationQueue({ telegramConfig: { token: null } })
     const attackerNotifs = await db.notification.findMany({
       where: { playerId: attacker.playerId, type: 'ATTACK_RESULT' },
     })

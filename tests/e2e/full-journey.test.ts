@@ -33,6 +33,7 @@ import { POST as notificationsReadPost } from '../../src/app/api/v1/player/notif
 import { drainNotificationQueue } from '../../src/lib/game/services/notification.service'
 import { STARTER_WALLET } from '../../src/lib/game/config/starter'
 import type { ApiEnvelope } from '../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ let playerId = ''
 
 beforeAll(async () => {
   // Self-healing identity range (a crashed prior run must not poison us).
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100026' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100026')
 })
 
 afterAll(async () => {
@@ -97,7 +98,7 @@ afterAll(async () => {
   await db.notificationQueue.deleteMany({
     where: { player: { user: { telegramId: TG_ID } } },
   })
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100026' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100026')
 })
 
 // ── The journey ──────────────────────────────────────────────────────────────
@@ -290,7 +291,10 @@ describe('E2E: registration → city → upgrade → train → rank → notifica
 
   it('STEP 7 — notifications: the journey produced real inbox rows; mark read works', async () => {
     for (let tick = 0; tick < 5; tick++) {
-      const ticked = await drainNotificationQueue({ batchSize: 50 })
+      const ticked = await drainNotificationQueue({
+        batchSize: 50,
+        telegramConfig: { token: null },
+      })
       if (ticked.claimed === 0) break
     }
     const res = await notificationsGet(request('/api/v1/player/notifications', token))

@@ -179,7 +179,15 @@ afterAll(async () => {
   await db.auditLog.deleteMany({ where: { targetId: { in: playerIds } } })
   await db.gameEvent.deleteMany({ where: { createdById: { in: userIds } } })
   await db.adminUser.deleteMany({ where: { userId: { in: userIds } } })
-  await db.user.deleteMany({ where: { telegramId: { in: tgIds } } })
+  {
+    const tgUsers = await db.user.findMany({
+      where: { telegramId: { in: tgIds } },
+      select: { id: true },
+    })
+    for (const tgUser of tgUsers) {
+      await db.user.delete({ where: { id: tgUser.id } }).catch(() => undefined)
+    }
+  }
 })
 
 // ── 1. Permissions ───────────────────────────────────────────────────────────

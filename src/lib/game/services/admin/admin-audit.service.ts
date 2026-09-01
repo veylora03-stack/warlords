@@ -29,6 +29,7 @@ export type AdminAuditTarget =
   | 'season'
   | 'quest'
   | 'player_quest'
+  | 'territory' // Phase 32 — world ops (lock, ownership)
 
 export interface AdminAuditInput {
   actorUserId: string

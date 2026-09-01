@@ -151,8 +151,12 @@ function counterMap(raw: unknown): Record<string, number> {
   return out
 }
 
-/** Builds a battle stack snapshot from a real PlayerUnit row + its catalog row. */
-function toBattleStack(count: number, unit: UnitCatalogRow): BattleUnitStack {
+/**
+ * Builds a battle stack snapshot from a real PlayerUnit row + its catalog row.
+ * Exported since Phase 32 — the territory assault pipeline reuses the SAME
+ * army loading (no second combat stack builder exists).
+ */
+export function toBattleStack(count: number, unit: UnitCatalogRow): BattleUnitStack {
   return {
     unitTypeId: unit.id,
     class: unit.class as BattleUnitStack['class'],
@@ -173,7 +177,12 @@ interface LoadedArmy {
   names: Map<string, string>
 }
 
-async function loadArmySide(
+/**
+ * Loads one side's army from REAL PlayerUnit rows + catalog. Exported since
+ * Phase 32 — the territory assault reuses this loader under the same
+ * battle-engine lock (never a second army builder).
+ */
+export async function loadArmySide(
   tx: ReadClient,
   playerId: string,
   name: string,
@@ -257,7 +266,11 @@ interface LossRow {
   count: number
 }
 
-function casualtyRows(losses: readonly LossRow[], names: Map<string, string>): CasualtyRow[] {
+/** Casualty display rows — exported since Phase 32 (territory assault reports). */
+export function casualtyRows(
+  losses: readonly LossRow[],
+  names: Map<string, string>,
+): CasualtyRow[] {
   return losses.map((loss) => ({
     unitId: loss.unitTypeId,
     unitName: names.get(loss.unitTypeId) ?? loss.unitTypeId,

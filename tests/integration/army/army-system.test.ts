@@ -62,6 +62,7 @@ import { ARMY_TRAINING } from '../../../src/lib/game/config/army'
 import { computeUnitBasePower } from '../../../src/lib/game/config/power'
 import { STARTER_UNITS } from '../../../src/lib/game/config/starter'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -311,7 +312,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100009' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100009')
 })
 
 // ── 1. Army view + catalog (read APIs) ───────────────────────────────────────

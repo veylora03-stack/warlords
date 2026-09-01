@@ -47,6 +47,7 @@ import {
 } from '../../../src/lib/telegram/webhook.service'
 import { drainNotificationQueue } from '../../../src/lib/game/services/notification.service'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -134,11 +135,11 @@ const parse = async (res: Response): Promise<ApiEnvelope<Record<string, unknown>
   (await res.json()) as ApiEnvelope<Record<string, unknown>>
 
 beforeAll(async () => {
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100027' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100027')
 })
 
 afterAll(async () => {
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '9100027' } } })
+  await purgeTestUsersByTelegramPrefix(db, '9100027')
 })
 
 // ── The journey ──────────────────────────────────────────────────────────────

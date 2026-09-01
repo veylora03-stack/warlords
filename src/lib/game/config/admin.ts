@@ -66,6 +66,9 @@ export const ADMIN_SCOPES = [
   // Quests ops (Phase 31 — enable/disable, inspect, reset, grant/revoke)
   'quests.view',
   'quests.manage',
+  // World ops (Phase 32 — territory inspect, lock/unlock, ownership)
+  'world.view',
+  'world.manage',
 ] as const
 
 export type AdminScope = (typeof ADMIN_SCOPES)[number]
@@ -88,6 +91,7 @@ export const ADMIN_ROLE_SCOPES: Record<AdminRole, readonly AdminScope[]> = {
     'announcements.create',
     'audit.view',
     'quests.view',
+    'world.view',
   ],
   ADMIN: ADMIN_SCOPES,
 }
@@ -172,6 +176,7 @@ export function validateAdminRbac(): string[] {
     'announcements.manage',
     'staff.manage',
     'season.settle',
+    'world.manage',
   ]
   for (const scope of moderatorForbidden) {
     if (ADMIN_ROLE_SCOPES.MODERATOR.includes(scope)) {

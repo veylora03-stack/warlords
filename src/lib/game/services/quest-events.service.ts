@@ -250,6 +250,8 @@ export const EARNED_LEDGER_REASONS = new Set([
   'QUEST_REWARD',
   'ACHIEVEMENT_REWARD',
   'SEASON_REWARD',
+  'TERRITORY_CAPTURE', // Phase 32 — assault spoils
+  'TERRITORY_PRODUCTION', // Phase 32 — lazy territory production
 ])
 
 /** Minimal shape of an applied ledger delta (structural — no economy import). */

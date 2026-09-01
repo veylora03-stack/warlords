@@ -17,8 +17,11 @@
  *  - PLAYER_POWER    → player.power
  *  - SEASON_TOP      → final season rank ≤ meta.rank (evaluated at settlement)
  *
- * TERRITORY achievements (FIRST_TERRITORY / 10_TERRITORIES) are intentionally
- * NOT seeded — the World/Territory engine has not landed in this repository.
+ * Phase 32: TERRITORY achievements are LIVE — world.service raises real
+ * territory stats (territoriesCaptured / territoriesDefended) inside the
+ * capture transaction, and the STAT metrics below evaluate against them.
+ * Simultaneous-hold (LAND LORD) intentionally stays a SET quest objective:
+ * monotonic counters cannot express a snapshot of current holdings.
  */
 
 import type { RewardKey } from './quests'
@@ -112,6 +115,36 @@ export const ACHIEVEMENTS: AchievementCatalogEntry[] = [
     meta: { statKey: 'unitsTrained' },
     target: 1_000,
     reward: { GEMS: 120, XP: 400 },
+  },
+  {
+    id: 'ach-first-territory',
+    title: 'First Territory',
+    description: 'Capture your first territory. Your banner flies beyond the walls.',
+    category: 'MILITARY',
+    metric: 'STAT',
+    meta: { statKey: 'territoriesCaptured' },
+    target: 1,
+    reward: { GEMS: 15, XP: 100 },
+  },
+  {
+    id: 'ach-conqueror',
+    title: 'Conqueror',
+    description: 'Capture 10 territories. The map bends to your will.',
+    category: 'MILITARY',
+    metric: 'STAT',
+    meta: { statKey: 'territoriesCaptured' },
+    target: 10,
+    reward: { GEMS: 80, XP: 400 },
+  },
+  {
+    id: 'ach-defender',
+    title: 'Shield Bearer',
+    description: 'Successfully defend your territories 5 times.',
+    category: 'MILITARY',
+    metric: 'STAT',
+    meta: { statKey: 'territoriesDefended' },
+    target: 5,
+    reward: { GEMS: 50, XP: 250 },
   },
   {
     id: 'ach-veteran-commander',

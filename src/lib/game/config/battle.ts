@@ -22,8 +22,12 @@ import type { TerrainType } from '@/lib/game/types/battle'
  * ANY value below changes: the old snapshot stays on existing battles.
  */
 export const BATTLE = {
-  /** Snapshot version persisted on every battle row (replay fidelity). */
-  version: 1,
+  /**
+   * Snapshot version persisted on every battle row (replay fidelity).
+   * v2 — Phase 32: terrainAttackBps extended with the full world terrain set
+   * (DESERT/SWAMP/HILLS/COAST); existing values unchanged.
+   */
+  version: 2,
 
   /** Hard cap on simulation rounds — prevents infinite engagements. */
   maxRounds: 12,
@@ -114,14 +118,19 @@ export const BATTLE = {
 
   /**
    * Terrain modifiers for the ATTACKER (bps; 0 = neutral). PVP city raids
-   * always resolve on CITY terrain today; the table is the extension point
-   * for the territory/world map phase.
+   * resolve on CITY terrain; TERRITORY_ASSAULT resolves on the target
+   * territory's terrain (Phase 32). The defender's terrain bonus lives in
+   * config/world.ts (defenseBps) and is applied through BattleSide.modifiers.
    */
   terrainAttackBps: {
     PLAINS: 0,
     FOREST: -500,
     MOUNTAINS: -1000,
+    DESERT: -250,
+    SWAMP: -750,
+    HILLS: -500,
     RIVER: -750,
+    COAST: -250,
     CITY: 0,
   } as Record<TerrainType, number>,
 

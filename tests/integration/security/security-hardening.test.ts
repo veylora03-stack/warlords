@@ -62,6 +62,7 @@ import {
 import { grantXp } from '../../../src/lib/game/services/progression.service'
 import { ADMIN_CONFIRMATIONS } from '../../../src/lib/game/config/admin'
 import type { ApiEnvelope } from '../../../src/types/api'
+import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 // Generous transaction bounds — this suite intentionally runs UNLOCKED
 // parallel transactions and a 600-row fan-out, which contend with both the
@@ -193,7 +194,7 @@ beforeAll(async () => {
     await db.auditLog.deleteMany({ where: { actorUserId: { in: residueIds } } })
     await db.announcement.deleteMany({ where: { createdById: { in: residueIds } } })
     await db.adminUser.deleteMany({ where: { userId: { in: residueIds } } })
-    await db.user.deleteMany({ where: { telegramId: { startsWith: '910004' } } })
+    await purgeTestUsersByTelegramPrefix(db, '910004')
   }
 
   // Staff fixtures: an ADMIN and a MODERATOR (DB rows are the authority).
@@ -234,7 +235,7 @@ afterAll(async () => {
   await db.notification.deleteMany({ where: { playerId: { in: playerIds } } })
   await db.notificationQueue.deleteMany({ where: { playerId: { in: playerIds } } })
   await db.announcement.deleteMany({ where: { createdById: { in: userIds } } })
-  await db.user.deleteMany({ where: { telegramId: { startsWith: '910004' } } })
+  await purgeTestUsersByTelegramPrefix(db, '910004')
 })
 
 async function envelope(res: Response): Promise<ApiEnvelope<Record<string, unknown>>> {

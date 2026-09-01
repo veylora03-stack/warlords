@@ -11,8 +11,11 @@
 import type { BattleResult, BattleType, UnitClass } from './common'
 import type { Coordinate } from './common'
 
-// TerrainType is declared here to keep battle self-contained until Phase 5.
-export type TerrainType = 'PLAINS' | 'FOREST' | 'MOUNTAINS' | 'RIVER' | 'CITY'
+// TerrainType — the full Phase 32 world terrain set. The battle config
+// (terrainAttackBps) covers EVERY member; the world generator assigns only
+// members of this union to territories.
+export type TerrainType =
+  'PLAINS' | 'FOREST' | 'MOUNTAINS' | 'DESERT' | 'SWAMP' | 'HILLS' | 'RIVER' | 'COAST' | 'CITY'
 
 // Re-exported for engine convenience.
 export type { BattleResult, BattleType, UnitClass }

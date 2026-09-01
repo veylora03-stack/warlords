@@ -27,11 +27,12 @@
  *  - SEASONAL  → one instance per season (cycle = season number), expiresAt
  *                = season.endsAt — unclaimed rewards expire at settlement
  *
- * TERRITORY quests (CONQUEROR / LAND LORD / DEFENDER) are intentionally NOT
- * seeded: the World/Territory engine has not landed in this repository, and
- * the engine must never consume fake events. The objective taxonomy and the
- * event union leave clean extension points (TERRITORY_CAPTURED etc.) for
- * that phase.
+ * Phase 32: TERRITORY objectives are LIVE — world.service raises the typed
+ * domain events (TERRITORY_CAPTURED / TERRITORY_DEFENDED) inside the capture
+ * transaction, and the engine matches CAPTURE_TERRITORIES (INCREMENT),
+ * CONTROL_TERRITORIES (SET — simultaneous hold) and DEFEND_TERRITORIES
+ * (INCREMENT) against them. Simultaneous-hold is a SET quest objective by
+ * design: achievement counters are monotonic and cannot express a snapshot.
  */
 
 import type { QuestType } from '@/lib/game/types/common'
@@ -193,6 +194,20 @@ export const QUESTS: QuestCatalogEntry[] = [
     cooldownHours: 0,
     sortOrder: 50,
   },
+  {
+    id: 'main-06-first-territory',
+    type: 'MAIN',
+    title: 'First Banner',
+    description: "Capture your first territory. Your banner must fly beyond the keep's walls.",
+    objectiveType: 'CAPTURE_TERRITORIES',
+    objectiveTarget: { amount: 1 },
+    reward: { GOLD: 300, WOOD: 150, XP: 150, HONOR: 20 },
+    prerequisiteQuestIds: ['main-05-warlord'],
+    minLevel: 0,
+    repeatable: false,
+    cooldownHours: 0,
+    sortOrder: 60,
+  },
 
   // ── DAILY (reset at UTC midnight — server clock only) ─────────────────────
   {
@@ -280,6 +295,50 @@ export const QUESTS: QuestCatalogEntry[] = [
     repeatable: true,
     cooldownHours: 0,
     sortOrder: 220,
+  },
+
+  // ── SEASONAL (reset at season settlement; rewards expire with the season) ─
+  {
+    id: 'seasonal-conqueror',
+    type: 'SEASONAL',
+    title: 'Conqueror',
+    description: 'Capture 3 territories this season. The map remembers the bold.',
+    objectiveType: 'CAPTURE_TERRITORIES',
+    objectiveTarget: { amount: 3 },
+    reward: { GOLD: 800, GEMS: 25, XP: 250, HONOR: 40 },
+    prerequisiteQuestIds: [],
+    minLevel: 0,
+    repeatable: true,
+    cooldownHours: 0,
+    sortOrder: 300,
+  },
+  {
+    id: 'seasonal-land-lord',
+    type: 'SEASONAL',
+    title: 'Land Lord',
+    description: 'Hold 5 territories at the same time this season.',
+    objectiveType: 'CONTROL_TERRITORIES',
+    objectiveTarget: { amount: 5 },
+    reward: { GOLD: 1000, CRYSTAL: 10, GEMS: 30, XP: 300 },
+    prerequisiteQuestIds: [],
+    minLevel: 0,
+    repeatable: true,
+    cooldownHours: 0,
+    sortOrder: 310,
+  },
+  {
+    id: 'seasonal-defender',
+    type: 'SEASONAL',
+    title: 'Shield of the Realm',
+    description: 'Successfully defend your territories 5 times this season.',
+    objectiveType: 'DEFEND_TERRITORIES',
+    objectiveTarget: { amount: 5 },
+    reward: { GOLD: 600, GEMS: 20, XP: 200, HONOR: 30 },
+    prerequisiteQuestIds: [],
+    minLevel: 0,
+    repeatable: true,
+    cooldownHours: 0,
+    sortOrder: 320,
   },
 ]
 

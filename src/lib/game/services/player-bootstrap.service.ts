@@ -20,6 +20,7 @@ import {
   STARTER_WALLET,
 } from '@/lib/game/config/starter'
 import { recalculatePlayerPower } from './power.service'
+import { claimCapitalTerritory } from './world-capital.service'
 import { enqueueNotificationInTx } from './notification.service'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import { emptyPlayerStats } from '@/lib/game/config/stats'
@@ -90,6 +91,17 @@ export async function bootstrapPlayer(
       y: input.city.y,
     },
     select: { id: true },
+  })
+
+  // 4b) Capital territory (Phase 32) — anchors the city onto the world grid,
+  //     is never attackable, and survives season settlement. Atomic with the
+  //     rest of the bootstrap: a player without a capital can never exist.
+  await claimCapitalTerritory(tx, {
+    playerId: player.id,
+    cityId: city.id,
+    x: input.city.x,
+    y: input.city.y,
+    cityName: `${input.name}'s Keep`,
   })
 
   // 5) Starter buildings — one of each type at level 1

@@ -69,6 +69,16 @@ const envSchema = z.object({
    * 0.0.0.0 (the platform router cannot reach a loopback-only server).
    */
   HOSTNAME: z.string().min(1).default('0.0.0.0'),
+  /**
+   * Ops kill-switch for the background notification-queue worker. Set true
+   * when a DEDICATED worker instance drains the queue (multi-instance
+   * deployments) or when a dev/QA server must not compete with tests that
+   * drive `drainNotificationQueue` directly.
+   */
+  NOTIFICATION_WORKER_DISABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
 })
 
 export type RawEnv = z.infer<typeof envSchema>
@@ -76,6 +86,8 @@ export type Env = z.output<typeof envSchema> & {
   isDev: boolean
   isProd: boolean
   isTest: boolean
+  /** Ops kill-switch: true disables this process's background queue worker. */
+  notificationWorkerDisabled: boolean
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -124,6 +136,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     isDev: data.NODE_ENV === 'development',
     isProd: data.NODE_ENV === 'production',
     isTest: data.NODE_ENV === 'test',
+    notificationWorkerDisabled: data.NOTIFICATION_WORKER_DISABLED,
   })
 }
 
