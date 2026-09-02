@@ -22,7 +22,7 @@
  *                       settlement-style RANK_CHANGE payloads through the engine
  *  8. RETENTION       — terminal queue rows + read inbox rows pruned
  *
- * Test identities live in the isolated 9100033… telegramId range and are
+ * Test identities live in the isolated 9100053… telegramId range and are
  * removed in afterAll (everything cascades; audit/event rows explicitly).
  */
 
@@ -57,7 +57,7 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   )
 }
 
-const TG_BASE = '9100033'
+const TG_BASE = '9100053'
 let tgCounter = 1
 const nextTgId = (): string => `${TG_BASE}${String(tgCounter++).padStart(3, '0')}`
 const tgIds: string[] = []

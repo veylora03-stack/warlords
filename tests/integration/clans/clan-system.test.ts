@@ -23,7 +23,7 @@
  *                   objective; clansJoined stat increments
  * 10. REPLAYS     — every mutation is state-guarded (typed 409s, no partials)
  *
- * Test identities live in the isolated 9100034… telegramId range and are
+ * Test identities live in the isolated 9100056… telegramId range and are
  * removed in afterAll.
  */
 
@@ -52,8 +52,8 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   throw new Error('Clan integration tests require TELEGRAM_BOT_TOKEN and JWT_SECRET (.env).')
 }
 
-const TG_PREFIX = '9100034'
-let tgCounter = 9100034001
+const TG_PREFIX = '9100056'
+let tgCounter = 9100056001
 const nextTgId = (): string => String(tgCounter++)
 let ipCounter = 1
 const nextIp = (): string => `203.0.135.${ipCounter++}`
@@ -112,7 +112,10 @@ async function call<T>(
   payload?: unknown,
   params?: Record<string, string>,
 ): Promise<{ status: number; body: ApiEnvelope<T> }> {
-  const res = await handler(authed(path, token, method, payload), params ? withParams(params) : undefined)
+  const res = await handler(
+    authed(path, token, method, payload),
+    params ? withParams(params) : undefined,
+  )
   return { status: res.status, body: (await res.json()) as ApiEnvelope<T> }
 }
 
@@ -177,7 +180,10 @@ describe('Clan system (create → join → roles → succession)', () => {
   })
 
   it('1 — refuses unauthenticated clan access', async () => {
-    const created = await call(clansPost, '', '/api/v1/clans', 'POST', { name: 'Ghost Clan', tag: 'GHOST' })
+    const created = await call(clansPost, '', '/api/v1/clans', 'POST', {
+      name: 'Ghost Clan',
+      tag: 'GHOST',
+    })
     expect(created.status).toBe(401)
     const listed = await call(clansGet, '', '/api/v1/clans')
     expect(listed.status).toBe(401)
@@ -230,12 +236,21 @@ describe('Clan system (create → join → roles → succession)', () => {
     expect(founderAgain.status).toBe(409)
     expect(founderAgain.body.error!.code).toBe('ALREADY_IN_CLAN')
 
-    const clanCount = await db.clan.count()
+    // Scoped to this suite's fixture (parallel suites create their own
+    // clans concurrently on the shared sandbox DB).
+    const clanCount = await db.clan.count({ where: { leaderPlayerId: founder.playerId } })
     expect(clanCount).toBe(1)
   })
 
   it('4 — OPEN join: member row + mirrors + count; roster shows MEMBER', async () => {
-    const joined = await call<ClanDetailView>(joinPost, officer.token, '/api/v1/clans/x/join', 'POST', {}, { id: clanId })
+    const joined = await call<ClanDetailView>(
+      joinPost,
+      officer.token,
+      '/api/v1/clans/x/join',
+      'POST',
+      {},
+      { id: clanId },
+    )
     expect(joined.status).toBe(200)
     expect(joined.body.data!.memberCount).toBe(2)
     expect(joined.body.data!.viewerRole).toBe('MEMBER')
@@ -245,21 +260,36 @@ describe('Clan system (create → join → roles → succession)', () => {
     expect(mirror.clanRole).toBe('MEMBER')
 
     // outsider joins too (for role tests)
-    const outsiderJoin = await call<ClanDetailView>(joinPost, outsider.token, '/api/v1/clans/x/join', 'POST', {}, { id: clanId })
+    const outsiderJoin = await call<ClanDetailView>(
+      joinPost,
+      outsider.token,
+      '/api/v1/clans/x/join',
+      'POST',
+      {},
+      { id: clanId },
+    )
     expect(outsiderJoin.status).toBe(200)
     expect(outsiderJoin.body.data!.memberCount).toBe(3)
 
-    const memberRow = await db.clanMember.findUniqueOrThrow({ where: { playerId: outsider.playerId } })
+    const memberRow = await db.clanMember.findUniqueOrThrow({
+      where: { playerId: outsider.playerId },
+    })
     expect(memberRow.clanId).toBe(clanId)
     expect(memberRow.role).toBe('MEMBER')
   })
 
   it('5 — INVITE_ONLY: closed join, invitation claimed exactly-once', async () => {
-    const invitorClan = await call<ClanDetailView>(clansPost, member.token, '/api/v1/clans', 'POST', {
-      name: 'Closed Circle',
-      tag: 'CIRC',
-      joinPolicy: 'INVITE_ONLY',
-    })
+    const invitorClan = await call<ClanDetailView>(
+      clansPost,
+      member.token,
+      '/api/v1/clans',
+      'POST',
+      {
+        name: 'Closed Circle',
+        tag: 'CIRC',
+        joinPolicy: 'INVITE_ONLY',
+      },
+    )
     expect(invitorClan.status).toBe(200)
     inviteOnlyClanId = invitorClan.body.data!.id
     clanIds.push(inviteOnlyClanId)
@@ -270,7 +300,14 @@ describe('Clan system (create → join → roles → succession)', () => {
 
     // A clanless player cannot join the closed clan directly.
     const intruder = await register()
-    const closed = await call(joinPost, intruder.token, '/api/v1/clans/x/join', 'POST', {}, { id: inviteOnlyClanId })
+    const closed = await call(
+      joinPost,
+      intruder.token,
+      '/api/v1/clans/x/join',
+      'POST',
+      {},
+      { id: inviteOnlyClanId },
+    )
     expect(closed.status).toBe(403)
     expect(closed.body.error!.code).toBe('CLAN_JOIN_POLICY_CLOSED')
 
@@ -295,16 +332,30 @@ describe('Clan system (create → join → roles → succession)', () => {
     expect(inbox.body.data!.invitations.some((i) => i.id === pendingInvitationId)).toBe(true)
 
     // The intruder joins WITH the invitation — claimed exactly-once.
-    const accepted = await call<ClanDetailView>(joinPost, intruder.token, '/api/v1/clans/x/join', 'POST', {
-      invitationId: pendingInvitationId,
-    }, { id: inviteOnlyClanId })
+    const accepted = await call<ClanDetailView>(
+      joinPost,
+      intruder.token,
+      '/api/v1/clans/x/join',
+      'POST',
+      {
+        invitationId: pendingInvitationId,
+      },
+      { id: inviteOnlyClanId },
+    )
     expect(accepted.status).toBe(200)
     expect(accepted.body.data!.memberCount).toBe(2)
 
     // Replay of the same invitation → typed 409, no double membership.
-    const replay = await call(joinPost, intruder.token, '/api/v1/clans/x/join', 'POST', {
-      invitationId: pendingInvitationId,
-    }, { id: inviteOnlyClanId })
+    const replay = await call(
+      joinPost,
+      intruder.token,
+      '/api/v1/clans/x/join',
+      'POST',
+      {
+        invitationId: pendingInvitationId,
+      },
+      { id: inviteOnlyClanId },
+    )
     expect(replay.status).toBe(409)
     expect(['CLAN_INVITATION_INVALID', 'ALREADY_IN_CLAN']).toContain(replay.body.error!.code)
   })
@@ -362,7 +413,14 @@ describe('Clan system (create → join → roles → succession)', () => {
 
   it('7 — removal: rank matrix + leader protection', async () => {
     const tempMember = await register()
-    const join = await call(joinPost, tempMember.token, '/api/v1/clans/x/join', 'POST', {}, { id: clanId })
+    const join = await call(
+      joinPost,
+      tempMember.token,
+      '/api/v1/clans/x/join',
+      'POST',
+      {},
+      { id: clanId },
+    )
     expect(join.status).toBe(200)
 
     // An OFFICER removes a MEMBER.
@@ -403,7 +461,14 @@ describe('Clan system (create → join → roles → succession)', () => {
 
   it('8 — succession: leader cannot leave; transfer swaps everything atomically', async () => {
     // The leader cannot leave without a successor.
-    const leaderLeave = await call(leavePost, founder.token, '/api/v1/clans/x/leave', 'POST', {}, { id: clanId })
+    const leaderLeave = await call(
+      leavePost,
+      founder.token,
+      '/api/v1/clans/x/leave',
+      'POST',
+      {},
+      { id: clanId },
+    )
     expect(leaderLeave.status).toBe(409)
     expect(leaderLeave.body.error!.code).toBe('CLAN_LEADER_SUCCESSION')
 
@@ -436,7 +501,14 @@ describe('Clan system (create → join → roles → succession)', () => {
     expect(roles[founder.playerId]).toBe('OFFICER')
 
     // Now the OLD leader can leave.
-    const leave = await call(leavePost, founder.token, '/api/v1/clans/x/leave', 'POST', {}, { id: clanId })
+    const leave = await call(
+      leavePost,
+      founder.token,
+      '/api/v1/clans/x/leave',
+      'POST',
+      {},
+      { id: clanId },
+    )
     expect(leave.status).toBe(200)
     const gone = await db.player.findUniqueOrThrow({ where: { id: founder.playerId } })
     expect(gone.clanId).toBeNull()
@@ -456,7 +528,11 @@ describe('Clan system (create → join → roles → succession)', () => {
     // The reserved JOIN_CLAN objective is now LIVE.
     const { matchesObjective } = await import('../../../src/lib/game/engine/quest/progress')
     expect(
-      matchesObjective('JOIN_CLAN', { amount: 1 }, { kind: 'CLAN_JOINED', clanId: 'x', clanName: 'Y' }),
+      matchesObjective(
+        'JOIN_CLAN',
+        { amount: 1 },
+        { kind: 'CLAN_JOINED', clanId: 'x', clanName: 'Y' },
+      ),
     ).toBe(true)
     expect(
       matchesObjective(
@@ -477,11 +553,20 @@ describe('Clan system (create → join → roles → succession)', () => {
     expect(list.body.data!.total).toBeGreaterThanOrEqual(2)
     expect(list.body.data!.clans.some((c) => c.id === clanId)).toBe(true)
 
-    const detail = await call<ClanDetailView>(clanGet, founder.token, '/api/v1/clans/x', 'GET', undefined, { id: inviteOnlyClanId })
+    const detail = await call<ClanDetailView>(
+      clanGet,
+      founder.token,
+      '/api/v1/clans/x',
+      'GET',
+      undefined,
+      { id: inviteOnlyClanId },
+    )
     expect(detail.status).toBe(200)
     expect(detail.body.data!.members.every((m) => typeof m.name === 'string')).toBe(true)
 
-    const fake = await call(clanGet, founder.token, '/api/v1/clans/x', 'GET', undefined, { id: 'nonexistent-clan' })
+    const fake = await call(clanGet, founder.token, '/api/v1/clans/x', 'GET', undefined, {
+      id: 'nonexistent-clan',
+    })
     expect(fake.status).toBe(404)
     expect(fake.body.error!.code).toBe('CLAN_NOT_FOUND')
   })

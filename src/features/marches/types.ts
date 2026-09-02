@@ -96,3 +96,14 @@ export interface ProcessMarchResult {
   /** True when this call actually transitioned the march (arrival or return). */
   processed: boolean
 }
+
+/**
+ * POST /api/v1/marches/[id]/withdraw — recalls a STATIONED positional
+ * detachment (status ARRIVED). Exactly-once rides the conditional
+ * ARRIVED → RETURNING claim; survivors keep their post-battle manifest and
+ * rejoin the army at homecoming.
+ */
+export interface WithdrawGarrisonResult {
+  march: MarchView
+  unitsReturning: number
+}

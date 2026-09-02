@@ -28,6 +28,7 @@ import type {
   MarchListView,
   MarchView,
   ProcessMarchResult,
+  WithdrawGarrisonResult,
 } from '../types'
 
 export const marchKeys = {
@@ -166,6 +167,27 @@ export function useProcessMarch() {
       void queryClient.invalidateQueries({ queryKey: ['marches'] })
       // An arrival resolves a battle and can capture the destination.
       void queryClient.invalidateQueries({ queryKey: ['world'] })
+    },
+  })
+}
+
+/**
+ * Withdraws a STATIONED positional detachment (status ARRIVED) — the march
+ * claim ARRIVED → RETURNING rides the one engine; survivors keep their
+ * post-battle manifest and rejoin the army at homecoming. Invalidates the
+ * march surfaces plus the world cache (the territory's garrison view and
+ * holdings re-render from it) and the army (restoration at homecoming).
+ */
+export function useWithdrawMarch() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (marchId: string) =>
+      postMarchData<WithdrawGarrisonResult>(`/api/v1/marches/${marchId}/withdraw`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['marches'] })
+      void queryClient.invalidateQueries({ queryKey: ['world'] })
+      void queryClient.invalidateQueries({ queryKey: worldKeys.playerTerritories })
+      void queryClient.invalidateQueries({ queryKey: ['army'] })
     },
   })
 }

@@ -6,7 +6,7 @@
  * foreign collection, client-controlled quest progress — every refusal must
  * be typed and (where applicable) ZERO-WRITE.
  *
- * Identities live in the isolated 9100033… telegramId range.
+ * Identities live in the isolated 9100052… telegramId range.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
@@ -39,13 +39,13 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   )
 }
 
-const TG_PREFIX = '9100033'
-const ADMIN_TG = '9100033000'
+const TG_PREFIX = '9100052'
+const ADMIN_TG = '9100052000'
 const IP = '203.0.134.'
 let ipCounter = 1
 const nextIp = (): string => `${IP}${ipCounter++}`
 
-let tgCounter = 9100033001
+let tgCounter = 9100052001
 const nextTgId = (): string => String(tgCounter++)
 
 function buildInitData(telegramId: string): string {

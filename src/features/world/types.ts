@@ -188,6 +188,35 @@ export interface TerritoryAttackResult {
   replayed?: boolean
 }
 
+/**
+ * One positional contribution on a territory (Phase 34). `units` is the
+ * contributor's CURRENT survivor manifest — the server sends [] unless the
+ * viewer is the owner or a contributor (viewerSeesComposition); unitCount
+ * (the raw strength) is always present.
+ */
+export interface GarrisonContributorView {
+  marchId: string
+  playerId: string
+  playerName: string
+  clanId: string | null
+  units: Array<{ unitId: string; count: number }>
+  unitCount: number
+  deployedAt: string
+}
+
+/** GET /api/v1/world/territories/[id]/garrison — positional garrison view. */
+export interface TerritoryGarrisonView {
+  territoryId: string
+  garrisoned: boolean
+  totalUnits: number
+  capacity: number
+  availableCapacity: number
+  contributionCount: number
+  /** Unit-level composition is visible only to the owner and contributors. */
+  viewerSeesComposition: boolean
+  contributors: GarrisonContributorView[]
+}
+
 export interface TerritoryCollectResult {
   territoryId: string
   resourceType: string

@@ -30,7 +30,7 @@
  *                              cancel after arrival → MARCH_NOT_CANCELLABLE
  * 12. LEDGER INVARIANT       — Σ(ledger deltas) == wallet balance for every resource
  *
- * Test identities live in the isolated 9100033… telegramId range and are
+ * Test identities live in the isolated 9100051… telegramId range and are
  * removed in afterAll (captured territories are RESET to unclaimed — the
  * shared sandbox world must stay reusable across suites).
  */
@@ -64,12 +64,12 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   )
 }
 
-const TG_PREFIX = '9100033'
+const TG_PREFIX = '9100051'
 const IP = '203.0.134.'
 let ipCounter = 1
 const nextIp = (): string => `${IP}${ipCounter++}`
 
-let tgCounter = 9100033001
+let tgCounter = 9100051001
 const nextTgId = (): string => String(tgCounter++)
 
 function buildInitData(telegramId: string): string {
@@ -463,10 +463,33 @@ describe('March system (create → travel → assault → return → restore)', 
 
     // SCOUT has no adjacency requirement — unit-level refusals ride SCOUT:
     // unknown unit (reaches the catalog oracle AFTER the free slot check)
+    //
+    // The shared world mutates under parallel suites (other players spawn
+    // capitals and capture center-adjacent cells), so "first UNCLAIMED row"
+    // is NOT a stable far cell for the ATTACK-beyond-the-front-line refusal
+    // below — pick one deterministically OUTSIDE the quartermaster's front
+    // line instead.
+    const holdings = await db.territory.findMany({
+      where: { ownerPlayerId: quartermaster.playerId },
+      select: { x: true, y: true },
+    })
+    const frontLine = new Set<string>(
+      holdings.flatMap((cell) => adjacentCoords(cell.x, cell.y).map((a) => `${a.x}:${a.y}`)),
+    )
     const farCell = await db.territory.findFirst({
-      where: { status: 'UNCLAIMED', isCapital: false },
+      where: {
+        status: 'UNCLAIMED',
+        isCapital: false,
+        NOT: {
+          OR: [...frontLine].map((key) => {
+            const [x, y] = key.split(':').map(Number)
+            return { x, y }
+          }),
+        },
+      },
       select: { id: true },
     })
+    expect(farCell).not.toBeNull()
     const badUnit = await call<{ error: { code: string } }>(
       marchPost,
       quartermaster.token,
@@ -593,20 +616,116 @@ describe('March system (create → travel → assault → return → restore)', 
     expect(fresh.status).toBe('EN_ROUTE')
   })
 
+  /**
+   * Resolves ONE assault through the arrival pipeline: first the march test 2
+   * created (its arrival is what frees the castle's single slot); if a
+   * parallel suite legitimately captured that target mid-flight (the engine's
+   * STALE_TARGET guard — the world is live), the detachment is brought home
+   * and a FRESH frontier target is assaulted, with bounded retries.
+   */
+  async function resolveFreshAssault(
+    unitCount: number,
+  ): Promise<{ view: MarchView; targetId: string }> {
+    const finishHomecoming = async (marchId: string): Promise<void> => {
+      await backdateReturn(marchId)
+      const processed = await call<{ march: MarchView; processed: boolean }>(
+        processPost,
+        lord.token,
+        '/api/v1/marches/x/process',
+        'POST',
+        undefined,
+        marchId,
+      )
+      expect(processed.status).toBe(200)
+    }
+    const elapseAndRefuel = async (): Promise<void> => {
+      await db.battle.updateMany({
+        where: {
+          attackerPlayerId: lord.playerId,
+          type: { in: ['PVP_ATTACK', 'TERRITORY_ASSAULT'] },
+        },
+        data: { startedAt: new Date(Date.now() - (BATTLE.cooldown.attackCooldownSec + 10) * 1000) },
+      })
+      await db.player.update({ where: { id: lord.playerId }, data: { energy: 100 } })
+    }
+
+    // 1) The march test 2 created — the normal path.
+    const existing = await db.march.findFirst({
+      where: { playerId: lord.playerId, status: 'EN_ROUTE' },
+    })
+    if (existing) {
+      await backdateArrival(existing.id)
+      const processed = await call<{ march: MarchView; processed: boolean }>(
+        processPost,
+        lord.token,
+        '/api/v1/marches/x/process',
+        'POST',
+        undefined,
+        existing.id,
+      )
+      expect(processed.status).toBe(200)
+      expect(processed.body.data!.processed).toBe(true)
+      const view = processed.body.data!.march
+      if (view.outcome?.aborted !== 'STALE_TARGET') {
+        return { view, targetId: existing.territoryId }
+      }
+      // 2) The world moved under the march — bring the detachment home so the
+      //    castle slot frees up, then assault a FRESH frontier cell.
+      await finishHomecoming(existing.id)
+    }
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const holdings = await db.territory.findMany({
+        where: { ownerPlayerId: lord.playerId },
+        select: { x: true, y: true },
+      })
+      const frontLine = new Set<string>(
+        holdings.flatMap((cell) => adjacentCoords(cell.x, cell.y).map((a) => `${a.x}:${a.y}`)),
+      )
+      const target = await db.territory.findFirst({
+        where: {
+          status: 'UNCLAIMED',
+          isCapital: false,
+          OR: [...frontLine].map((key) => {
+            const [x, y] = key.split(':').map(Number)
+            return { x, y }
+          }),
+        },
+        select: { id: true },
+      })
+      if (!target) throw new Error('no frontier cell left for the assault test')
+      touchedTerritoryIds.push(target.id)
+      await elapseAndRefuel()
+      const created = await call<MarchView>(marchPost, lord.token, '/api/v1/marches', 'POST', {
+        territoryId: target.id,
+        type: 'ATTACK',
+        units: [{ unitId: 'swordsman', count: unitCount }],
+      })
+      if (created.status !== 200) continue
+      await backdateArrival(created.body.data!.id)
+      const processed = await call<{ march: MarchView; processed: boolean }>(
+        processPost,
+        lord.token,
+        '/api/v1/marches/x/process',
+        'POST',
+        undefined,
+        created.body.data!.id,
+      )
+      expect(processed.status).toBe(200)
+      expect(processed.body.data!.processed).toBe(true)
+      const view = processed.body.data!.march
+      if (view.outcome?.aborted === 'STALE_TARGET') {
+        // Stale AGAIN — go home, free the slot, try another cell.
+        await finishHomecoming(created.body.data!.id)
+        continue
+      }
+      return { view, targetId: target.id }
+    }
+    throw new Error('assault target kept going stale under parallel suites')
+  }
+
   it('7 — ATTACK arrival runs the REAL battle engine through the shared pipeline', async () => {
-    const march = await db.march.findFirstOrThrow({ where: { playerId: lord.playerId } })
-    await backdateArrival(march.id)
-    const processed = await call<{ march: MarchView; processed: boolean }>(
-      processPost,
-      lord.token,
-      '/api/v1/marches/x/process',
-      'POST',
-      undefined,
-      march.id,
-    )
-    expect(processed.status).toBe(200)
-    expect(processed.body.data!.processed).toBe(true)
-    const view = processed.body.data!.march
+    const { view, targetId } = await resolveFreshAssault(40)
     // Either the assault resolved (RETURNING survivors) or everything died (LOST)
     expect(['RETURNING', 'LOST']).toContain(view.status)
 
@@ -620,7 +739,7 @@ describe('March system (create → travel → assault → return → restore)', 
       where: { id: view.outcome!.battleId as string },
     })
     expect(battle.type).toBe('TERRITORY_ASSAULT')
-    expect(battle.marchId).toBe(march.id)
+    expect(battle.marchId).toBe(view.id)
     expect(battle.energySpent).toBe(10)
 
     if (view.status === 'RETURNING') {
@@ -644,12 +763,12 @@ describe('March system (create → travel → assault → return → restore)', 
       if (battle.result === 'ATTACKER_WIN') {
         expect(view.outcome!.captured).toBe(true)
         const territory = await db.territory.findUniqueOrThrow({
-          where: { id: adjacentUnclaimed!.id },
+          where: { id: targetId },
         })
         expect(territory.ownerPlayerId).toBe(lord.playerId)
         // append-only history with the battle id
         const history = await db.territoryHistory.findFirstOrThrow({
-          where: { territoryId: adjacentUnclaimed!.id, battleId: battle.id, reason: 'CAPTURE' },
+          where: { territoryId: targetId, battleId: battle.id, reason: 'CAPTURE' },
         })
         expect(history.newOwnerId).toBe(lord.playerId)
       }
@@ -666,6 +785,17 @@ describe('March system (create → travel → assault → return → restore)', 
     })
     const manifest = march.survivors as Array<{ unitId: string; count: number }>
     const armyBefore = await homeArmy(lord.playerId)
+    // Delta baselines — the assault path may have completed an extra march
+    // (a stale-target homecoming under parallel suites).
+    const statsBefore = (
+      await db.player.findUniqueOrThrow({ where: { id: lord.playerId }, select: { stats: true } })
+    ).stats as Record<string, number>
+    const completedBefore = statsBefore['marchesCompleted'] ?? 0
+    const patrolBefore = (
+      await call<{
+        quests: Array<{ id: string; instance: { progress: number; status: string } | null }>
+      }>(questsBoardGet, lord.token, '/api/v1/quests')
+    ).body.data!.quests.find((q) => q.id === 'weekly-patrol')!.instance!.progress
     const expectedSwordsman =
       (armyBefore.get('swordsman') ?? 0) +
       (manifest.find((s) => s.unitId === 'swordsman')?.count ?? 0)
@@ -694,7 +824,7 @@ describe('March system (create → travel → assault → return → restore)', 
         select: { stats: true },
       })
     ).stats as Record<string, number>
-    expect(stats['marchesCompleted']).toBe(1)
+    expect(stats['marchesCompleted']).toBe(completedBefore + 1)
     expect(stats['marchesScouted']).toBe(0) // zero-filled catalog normalization
 
     // MARCH_COMPLETED quest progress on weekly-patrol (1/5)
@@ -705,7 +835,7 @@ describe('March system (create → travel → assault → return → restore)', 
     const patrol = board.body.data!.quests.find((q) => q.id === 'weekly-patrol')
     expect(patrol).toBeDefined()
     expect(patrol!.instance).not.toBeNull()
-    expect(patrol!.instance!.progress).toBe(1)
+    expect(patrol!.instance!.progress).toBe(patrolBefore + 1)
     expect(patrol!.instance!.status).toBe('ACTIVE')
 
     // Processing AGAIN is an idempotent no-op (no double restoration).

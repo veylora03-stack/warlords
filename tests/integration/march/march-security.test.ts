@@ -7,7 +7,7 @@
  * cancel-after-combat, double-return, client-forged progress. Every exploit
  * must be FIXED (typed refusal, zero writes) — never silently accepted.
  *
- * Identities live in the isolated 9100034… telegramId range.
+ * Identities live in the isolated 9100054… telegramId range.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
@@ -31,10 +31,10 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   throw new Error('March security tests require TELEGRAM_BOT_TOKEN and JWT_SECRET (.env).')
 }
 
-const TG_PREFIX = '9100034'
+const TG_PREFIX = '9100054'
 const IP = '203.0.135.1'
 
-let tgCounter = 9100034001
+let tgCounter = 9100054001
 const nextTgId = (): string => String(tgCounter++)
 
 function buildInitData(telegramId: string, overrides?: Record<string, unknown>): string {

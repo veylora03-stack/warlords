@@ -62,6 +62,7 @@ import {
 import { QuestsSection } from '@/features/quests'
 import { MarchesSection } from '@/features/marches'
 import { WorldMapSection } from '@/features/world'
+import { ClansSection } from '@/features/clans'
 
 type PhaseState = 'done' | 'next' | 'planned'
 
@@ -768,7 +769,9 @@ export default function WarlordsConsole() {
 
       {/* ── Main ───────────────────────────────────────────────────────── */}
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">
-        <div className="grid gap-6 md:grid-cols-2">
+        {/* [&>*]:min-w-0 — status cards must be allowed to shrink below their
+            mono content's min-width or 390px viewports scroll sideways. */}
+        <div className="grid gap-6 md:grid-cols-2 [&>*]:min-w-0">
           {/* System status — live from /api/health via TanStack Query */}
           <Card className="border-zinc-800 bg-zinc-900/60">
             <CardHeader className="pb-3">
@@ -2024,6 +2027,10 @@ export default function WarlordsConsole() {
           {/* Marches — live from /api/v1/marches* (Phase 33); self-contained
               section card: hooks inside, enabled while signed in */}
           <MarchesSection signedIn={signedIn} />
+
+          {/* Clans — live from /api/v1/clans* (Phase 34); self-contained
+              section card: hooks inside, enabled while signed in */}
+          <ClansSection signedIn={signedIn} />
 
           {/* Architecture at a glance */}
           <Card className="border-zinc-800 bg-zinc-900/60">

@@ -11,7 +11,7 @@
  *  4. cancel × arrival race (10 cancels + 10 arrivals) → exactly one wins
  *  5. same march × 10 cancellation requests → exactly one state transition
  *
- * Identities live in the isolated 9100035… telegramId range.
+ * Identities live in the isolated 9100057… telegramId range.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
@@ -33,10 +33,10 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   throw new Error('March concurrency tests require TELEGRAM_BOT_TOKEN and JWT_SECRET (.env).')
 }
 
-const TG_PREFIX = '9100035'
+const TG_PREFIX = '9100057'
 const IP = '203.0.136.1'
 
-let tgCounter = 9100035001
+let tgCounter = 9100057001
 const nextTgId = (): string => String(tgCounter++)
 
 function buildInitData(telegramId: string): string {

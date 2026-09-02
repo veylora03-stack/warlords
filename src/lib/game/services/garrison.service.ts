@@ -34,6 +34,8 @@ import { AppError } from '@/lib/api/errors'
 import type { Tx } from './player-bootstrap.service'
 import { GARRISON, garrisonCapacity } from '@/lib/game/config/garrison'
 import { toBattleStack } from './battle.service'
+import { notificationDedupeKeys } from '@/lib/game/config/notifications'
+import { enqueueNotificationInTx } from './notification.service'
 import {
   readStoredStacks,
   subtractStacks,
@@ -236,7 +238,9 @@ export async function applyGarrisonCasualtiesInTx(
     const manifest = manifests.find((m) => m.contributionId === contributionId)!
     const survivors = subtractStacks(manifest.units, contributionLosses)
     if (survivors.length === 0) {
-      // Contribution wiped — the row disappears and its march is LOST.
+      // Contribution wiped — the row disappears and its march is LOST. The
+      // contributor is TOLD: a garrison destroyed in combat is a
+      // GARRISON_DESTROYED notification exactly like a capture routing.
       const deleted = await tx.territoryGarrison.deleteMany({
         where: { id: contributionId },
       })
@@ -260,6 +264,24 @@ export async function applyGarrisonCasualtiesInTx(
           'INTERNAL_ERROR',
           `March ${manifest.marchId} was not ARRIVED while its garrison died`,
         )
+      }
+      const wipedFor = rows.find((row) => row.id === contributionId)!
+      const territory = await tx.territory.findUnique({
+        where: { id: territoryId },
+        select: { x: true, y: true },
+      })
+      if (territory) {
+        await enqueueNotificationInTx(tx, {
+          playerId: wipedFor.playerId,
+          type: 'GARRISON_DESTROYED',
+          dedupeKey: notificationDedupeKeys.garrisonDestroyed(manifest.marchId),
+          payload: {
+            battleId,
+            territoryId,
+            coord: { x: territory.x, y: territory.y },
+            unitsLost: totalUnits(manifest.units),
+          },
+        })
       }
     } else {
       await tx.territoryGarrison.update({

@@ -7,8 +7,10 @@
  * terrain-tinted cells with pan/recenter controls, a region strip and a lazy
  * territory detail panel (GET /api/v1/world/territories/[id]) with the
  * server-computed assault verdict, production collection, the Phase 33 march
- * launch form and the append-only ownership history. Every value shown is
- * server-computed — nothing here is
+ * launch form, the Phase 34 positional garrison block (strength/capacity,
+ * server-filtered contributors, DEFEND/REINFORCE deploy through the ONE march
+ * engine and per-contribution withdraw) and the append-only ownership
+ * history. Every value shown is server-computed — nothing here is
  * mock, hard-coded or optimistic: adjacency, season gates, terrain, garrisons,
  * casualties, capture and production accrual are decided by the server.
  *
@@ -24,23 +26,30 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useArmyQuery } from '@/features/army'
+import { useClanDetail } from '@/features/clans'
 import { useCreateMarch } from '@/features/marches'
 import type { MarchAction } from '@/features/marches'
+import { usePlayerProfileQuery } from '@/features/player'
 import {
   useAttackTerritory,
   useCollectProduction,
+  useDeployGarrison,
   usePlayerTerritories,
   useTerritoryDetail,
+  useTerritoryGarrison,
   useTerritoryHistory,
+  useWithdrawTerritoryGarrison,
   useWorldMap,
 } from '../api/world'
 import type {
   AttackBlockerReason,
   BattleOutcome,
+  GarrisonContributorView,
   TerritoryAttackResult,
   TerritoryDetailView,
   TerritoryHistoryReason,
@@ -451,6 +460,406 @@ function MarchLaunchPanel({ detail, ownedByViewer }: MarchLaunchPanelProps) {
         Units leave your army while the march is in flight; origin, travel time and the outcome are
         server-computed.
       </p>
+    </div>
+  )
+}
+
+// ── Positional garrison panel (Phase 34) ─────────────────────────────────────
+
+/** Typed garrison refusal → human text (server error codes win). */
+const GARRISON_ERROR_TEXT: Record<string, string> = {
+  VALIDATION_ERROR: 'Invalid deployment order',
+  TERRITORY_NOT_FOUND: 'Territory not found',
+  MARCH_DESTINATION_NOT_OWNED:
+    'Only your own (DEFEND) or a clanmate’s (REINFORCE) territory accepts garrisons',
+  MARCH_GARRISON_FULL: 'That garrison is at capacity',
+  MARCH_SLOTS_EXHAUSTED: 'All march slots are busy',
+  MARCH_INVALID_UNITS: 'Unit stacks are invalid — check the counts',
+  INSUFFICIENT_UNITS: 'Not enough units available',
+  INSUFFICIENT_ENERGY: 'Not enough energy to deploy',
+  ACTION_ON_COOLDOWN: 'Army regrouping — wait out the cooldown',
+  SEASON_NOT_ACTIVE: 'No active season',
+  MARCH_NOT_FOUND: 'No stationed detachment of yours here',
+  MARCH_NOT_WITHDRAWABLE: 'That detachment can no longer be withdrawn (battle settled it)',
+  IDEMPOTENT_REPLAY: 'This order was already processed',
+}
+
+function garrisonErrorText(error: Error & { code?: string }): string {
+  if (error.code && GARRISON_ERROR_TEXT[error.code]) return GARRISON_ERROR_TEXT[error.code]
+  return error.message || 'Garrison action failed — try again'
+}
+
+function garrisonPct(totalUnits: number, capacity: number): number {
+  if (!Number.isFinite(capacity) || capacity <= 0) return 0
+  return Math.min(100, Math.max(0, Math.round((totalUnits / capacity) * 100)))
+}
+
+/** "40× swordsman · 5× scout" — survivor manifest (unit ids, server data). */
+function garrisonStacksSummary(units: Array<{ unitId: string; count: number }>): string {
+  return units.map((stack) => `${stack.count}× ${stack.unitId}`).join(' · ')
+}
+
+interface ContributorRowProps {
+  contributor: GarrisonContributorView
+  own: boolean
+  withdrawPending: boolean
+  onWithdraw: (contributor: GarrisonContributorView) => void
+}
+
+/** One contributor row — manifest ONLY if the server let the viewer see it. */
+function ContributorRow({ contributor, own, withdrawPending, onWithdraw }: ContributorRowProps) {
+  const deployed = new Date(contributor.deployedAt)
+  return (
+    <li
+      className={`rounded border px-2 py-1.5 ${
+        own ? 'border-amber-500/30 bg-amber-500/5' : 'border-zinc-800 bg-zinc-950/60'
+      }`}
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <span className="min-w-0 truncate text-[10px] font-semibold text-zinc-200">
+          {contributor.playerName}
+          {own ? <span className="ml-1 text-[10px] text-amber-300">(you)</span> : null}
+        </span>
+        <span className="shrink-0 text-[10px] text-zinc-400">
+          <span className="text-amber-400">{contributor.unitCount}</span> units
+        </span>
+      </div>
+      <p className="mt-0.5 text-[10px] text-zinc-500 [overflow-wrap:anywhere]">
+        {contributor.units.length > 0
+          ? garrisonStacksSummary(contributor.units)
+          : 'composition hidden by the server'}
+        {' · '}
+        deployed {deployed.toLocaleDateString()} {deployed.toLocaleTimeString()}
+      </p>
+      {own ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mt-1.5 min-h-[44px] border-zinc-700 px-3 text-[10px] font-bold text-zinc-300 hover:bg-zinc-800"
+          disabled={withdrawPending}
+          onClick={() => onWithdraw(contributor)}
+          aria-label="Withdraw your stationed detachment home"
+        >
+          {withdrawPending ? '… WITHDRAWING' : '[ WITHDRAW ]'}
+        </Button>
+      ) : null}
+    </li>
+  )
+}
+
+/**
+ * Station a positional detachment (DEFEND own / REINFORCE same-clan owner) —
+ * same unit-picker pattern as MarchLaunchPanel. Rendered only when the
+ * viewer passes the CLIENT-side mirror of the server's authorization (owner
+ * or same-clan); the server re-checks and its typed refusals surface as
+ * toasts regardless.
+ */
+function GarrisonDeployForm({
+  detail,
+  isOwner,
+  isSameClanOwner,
+  availableCapacity,
+}: {
+  detail: TerritoryDetailView
+  isOwner: boolean
+  isSameClanOwner: boolean
+  availableCapacity: number
+}) {
+  const [action, setAction] = useState<'DEFEND' | 'REINFORCE'>(isOwner ? 'DEFEND' : 'REINFORCE')
+  const [counts, setCounts] = useState<Record<string, number>>({})
+  const { data: army } = useArmyQuery()
+  const deployGarrison = useDeployGarrison()
+  const { toast } = useToast()
+
+  const stacks = army?.units ?? []
+  const options = [
+    { type: 'DEFEND' as const, enabled: isOwner },
+    { type: 'REINFORCE' as const, enabled: isOwner || isSameClanOwner },
+  ]
+  const committed = Object.values(counts).reduce((sum, count) => sum + count, 0)
+
+  function setCount(unitId: string, raw: string, max: number) {
+    const parsed = Number.parseInt(raw, 10)
+    const next = Number.isNaN(parsed) ? 0 : Math.min(Math.max(parsed, 0), max)
+    setCounts((prev) => ({ ...prev, [unitId]: next }))
+  }
+
+  function handleDeploy() {
+    const units = stacks
+      .map((stack) => ({ unitId: stack.unitId, count: counts[stack.unitId] ?? 0 }))
+      .filter((entry) => entry.count > 0)
+    if (units.length === 0) return
+    // One idempotency key per logical deployment — a retry of the SAME
+    // submission replays the stored server response instead of marching twice.
+    const key = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : String(Date.now())
+    deployGarrison.mutate(
+      { territoryId: detail.id, type: action, units, idempotencyKey: key },
+      {
+        onSuccess: (march) => {
+          const etaSec = Math.round((Date.parse(march.arrivesAt) - march.serverNowMs) / 1000)
+          toast({
+            title: `${march.type} march launched — arrival ~${formatEta(etaSec)}`,
+            description:
+              'Units station on arrival (server capacity check) — withdraw them from this panel or the marches list.',
+          })
+          setCounts({})
+        },
+        onError: (error) => {
+          const typed = error as Error & { code?: string }
+          toast({
+            title: 'Deployment refused',
+            description: garrisonErrorText(typed),
+            variant: 'destructive',
+          })
+        },
+      },
+    )
+  }
+
+  return (
+    <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+        Station garrison
+        <span className="ml-2 font-normal normal-case tracking-normal text-zinc-500">
+          positional defense for this territory
+        </span>
+      </p>
+
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Garrison deploy action">
+        {options.map((option) => {
+          const selected = option.type === action
+          return (
+            <button
+              key={option.type}
+              type="button"
+              aria-pressed={selected}
+              disabled={!option.enabled}
+              onClick={() => setAction(option.type)}
+              className={`min-h-[36px] rounded border px-2.5 text-[10px] font-semibold uppercase tracking-wider ${
+                selected
+                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                  : option.enabled
+                    ? 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'
+                    : 'border-zinc-800 text-zinc-600'
+              }`}
+            >
+              {option.type}
+            </button>
+          )
+        })}
+      </div>
+
+      {army === undefined ? (
+        <p className="text-[10px] text-zinc-500">probing /api/v1/army …</p>
+      ) : stacks.length === 0 ? (
+        <p className="text-[10px] text-zinc-500">No units available — train units first.</p>
+      ) : (
+        <div className="space-y-1">
+          {stacks.map((stack) => (
+            <div key={stack.unitId} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 flex-1 truncate text-[10px] text-zinc-300">
+                {stack.name}
+              </span>
+              <span className="shrink-0 text-[10px] text-zinc-500">{stack.count} avail</span>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={stack.count}
+                step={1}
+                value={counts[stack.unitId] ?? 0}
+                onChange={(event) => setCount(stack.unitId, event.target.value, stack.count)}
+                disabled={deployGarrison.isPending}
+                aria-label={`Units of ${stack.name} to station`}
+                className="h-8 w-16 border-zinc-700 bg-zinc-950 px-1.5 py-0 text-center font-mono text-[11px] text-zinc-200"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Button
+        size="sm"
+        className="min-h-[44px] w-full bg-amber-500 text-[11px] font-bold text-zinc-950 hover:bg-amber-400"
+        disabled={deployGarrison.isPending || stacks.length === 0 || committed <= 0}
+        onClick={handleDeploy}
+        aria-label={`Launch a ${action} garrison march to ${territoryLabel(detail)}`}
+      >
+        {deployGarrison.isPending ? '… DEPLOYING' : `[ DEPLOY ${action} ]`}
+      </Button>
+      <p className="text-[10px] text-zinc-500">
+        {committed <= 0
+          ? 'Commit at least one unit.'
+          : `${committed} unit${committed === 1 ? '' : 's'} committed`}
+        {committed > availableCapacity && availableCapacity >= 0
+          ? ` — over the ${availableCapacity} units the garrison still accepts (server bounces the whole detachment on arrival)`
+          : ''}
+      </p>
+      <p className="text-[10px] leading-relaxed text-zinc-600">
+        Deployment is a march: units leave your army at launch, travel server-computed legs and
+        station on arrival if capacity holds.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * The territory's positional garrison block: strength/capacity bar, the
+ * server's contributor list (unit manifests ONLY when viewerSeesComposition —
+ * the server filters) and per-own-contribution WITHDRAW. Deploy controls
+ * appear for the owner / same-clan viewers, mirroring the server's
+ * authorization matrix (which alone decides).
+ */
+function TerritoryGarrisonPanel({ detail }: { detail: TerritoryDetailView }) {
+  const { data: profile } = usePlayerProfileQuery()
+  const viewerPlayerId = profile?.id ?? null
+  const myClanId = profile?.clan?.id ?? null
+  const { data: myClan } = useClanDetail({ enabled: myClanId !== null, clanId: myClanId })
+  const {
+    data: garrison,
+    error: garrisonError,
+    isPending: garrisonPending,
+    refetch: refetchGarrison,
+  } = useTerritoryGarrison({ territoryId: detail.id })
+  const withdraw = useWithdrawTerritoryGarrison()
+  const { toast } = useToast()
+
+  const isOwner = viewerPlayerId !== null && detail.ownerPlayerId === viewerPlayerId
+  // Clanmate of the owner — read from the live server roster (public data).
+  const isSameClanOwner =
+    !isOwner &&
+    detail.ownerPlayerId !== null &&
+    myClanId !== null &&
+    (myClan?.members ?? []).some((member) => member.playerId === detail.ownerPlayerId)
+  const canDeploy = isOwner || isSameClanOwner
+
+  function handleWithdraw(contributor: GarrisonContributorView) {
+    withdraw.mutate(
+      { territoryId: detail.id, marchId: contributor.marchId },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: `Withdrawal started — ${result.unitsReturning} units heading home`,
+            description: 'Survivors ride the march return leg and rejoin your army at homecoming.',
+          })
+        },
+        onError: (error) => {
+          const typed = error as Error & { code?: string }
+          toast({
+            title: 'Withdrawal refused',
+            description: garrisonErrorText(typed),
+            variant: 'destructive',
+          })
+        },
+      },
+    )
+  }
+
+  return (
+    <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+        Garrison
+        <span className="ml-2 font-normal normal-case tracking-normal text-zinc-500">
+          positional defense strength — server intel
+        </span>
+      </p>
+
+      {garrisonPending ? (
+        <div className="space-y-1.5">
+          <Skeleton className="h-2 w-full bg-zinc-800" />
+          <Skeleton className="h-3 w-1/2 bg-zinc-800" />
+        </div>
+      ) : garrisonError ? (
+        <div className="space-y-1.5">
+          <p className="text-red-400" role="alert">
+            {(garrisonError as Error & { code?: string }).code ?? 'ERROR'}: {garrisonError.message}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 border-zinc-700 px-2 text-[10px] text-zinc-300"
+            onClick={() => refetchGarrison()}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : garrison ? (
+        <>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <Badge
+              variant="outline"
+              className={`px-1.5 py-0 text-[9px] font-semibold ${
+                garrison.garrisoned
+                  ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
+                  : 'border-zinc-700 text-zinc-500'
+              }`}
+            >
+              {garrison.garrisoned ? '🛡 GARRISONED' : 'NO GARRISON'}
+            </Badge>
+            <span className="text-[10px] text-zinc-500">
+              <span className="text-zinc-200">{garrison.totalUnits}</span>/{garrison.capacity} units
+              · {garrison.contributionCount} contribution
+              {garrison.contributionCount === 1 ? '' : 's'}
+            </span>
+          </div>
+          <Progress
+            value={garrisonPct(garrison.totalUnits, garrison.capacity)}
+            aria-label={`Garrison strength ${garrison.totalUnits} of ${garrison.capacity}`}
+            className="h-1.5 bg-zinc-800"
+          />
+          <p className="text-[10px] text-zinc-500">
+            {garrison.availableCapacity} units of capacity still accepted
+            {!garrison.viewerSeesComposition && garrison.garrisoned
+              ? ' · unit composition visible to the owner and contributors only'
+              : ''}
+          </p>
+
+          {garrison.contributors.length > 0 ? (
+            <ul
+              className="max-h-56 space-y-1 overflow-y-auto pr-1"
+              aria-label="Garrison contributors"
+            >
+              {garrison.contributors.map((contributor) => (
+                <ContributorRow
+                  key={contributor.marchId}
+                  contributor={contributor}
+                  own={viewerPlayerId !== null && contributor.playerId === viewerPlayerId}
+                  withdrawPending={withdraw.isPending}
+                  onWithdraw={handleWithdraw}
+                />
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              No stationed detachments — DEFEND/REINFORCE marches man this garrison on arrival.
+            </p>
+          )}
+
+          {detail.ownerPlayerId !== null ? (
+            canDeploy ? (
+              <GarrisonDeployForm
+                key={detail.id}
+                detail={detail}
+                isOwner={isOwner}
+                isSameClanOwner={isSameClanOwner}
+                availableCapacity={garrison.availableCapacity}
+              />
+            ) : (
+              <p className="flex items-center gap-1 text-[10px] text-orange-400">
+                <span aria-hidden>🔒</span>
+                <span className="min-w-0">
+                  Only the owner (DEFEND) and their clanmates (REINFORCE) may station troops here.
+                </span>
+              </p>
+            )
+          ) : (
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              Unclaimed ground — no one may station a garrison here; its resistance is the
+              generator&apos;s virtual defense.
+            </p>
+          )}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -931,6 +1340,14 @@ export function WorldMapSection({ signedIn }: { signedIn: boolean }) {
                       detail={detail}
                       ownedByViewer={ownedIds.has(detail.id)}
                     />
+                  ) : null}
+
+                  {/* Positional garrison — strength/capacity bar, server-filtered
+                      contributors, DEFEND/REINFORCE deploy and per-contribution
+                      withdraw (Phase 34); lazy per-territory fetch, remounts with
+                      the selection */}
+                  {signedIn && detail ? (
+                    <TerritoryGarrisonPanel key={`garrison-${detail.id}`} detail={detail} />
                   ) : null}
 
                   {/* Ownership history — append-only public world record */}

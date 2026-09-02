@@ -5,7 +5,10 @@
  *
  * Renders the LIVE server march list (GET /api/v1/marches) — type, route,
  * committed units, status and a LIVE countdown for in-flight legs — plus the
- * recall (POST cancel) and server progress-check (POST process) affordances.
+ * recall (POST cancel), server progress-check (POST process) and the Phase 34
+ * STATIONED affordance: ARRIVED garrison marches carry a STATIONED badge and
+ * a WITHDRAW button (POST /marches/[id]/withdraw) that starts the exactly-once
+ * return leg.
  * Every value shown is server-computed — nothing here is mock, hard-coded or
  * optimistic: origin, distance, travel time, arrival, battle outcome and
  * homecoming are decided inside one globally serialized transaction. The
@@ -27,7 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
-import { useCancelMarch, useMarches, useProcessMarch } from '../api/marches'
+import { useCancelMarch, useMarches, useProcessMarch, useWithdrawMarch } from '../api/marches'
 import type { MarchListView, MarchStackView, MarchStatus, MarchType, MarchView } from '../types'
 
 // ── Static class lookups (never interpolate Tailwind class names) ────────────
@@ -70,6 +73,12 @@ const PROCESS_ERROR_TEXT: Record<string, string> = {
   MARCH_NOT_FOUND: 'March not found',
 }
 
+/** Typed garrison-withdraw refusal → human text (server error codes win). */
+const WITHDRAW_ERROR_TEXT: Record<string, string> = {
+  MARCH_NOT_FOUND: 'March not found',
+  MARCH_NOT_WITHDRAWABLE: 'Only a stationed garrison march can be withdrawn',
+}
+
 // ── Display helpers (pure, server data in — text out) ────────────────────────
 
 /** "40× Swordsman · 5× Scout" — committed/surviving units summary. */
@@ -108,6 +117,13 @@ function outcomeSummary(march: MarchView): string | null {
     return typeof outcome?.unitsLost === 'number'
       ? `lost in action — ${outcome.unitsLost} units perished`
       : 'lost in action — no survivors'
+  }
+  if (march.status === 'ARRIVED') {
+    // Phase 34 — the detachment is STATIONED as a positional garrison.
+    if (march.type === 'DEFEND' || march.type === 'REINFORCE') {
+      return 'detachment stationed — holding the garrison'
+    }
+    return 'arrived'
   }
   if (march.status !== 'COMPLETED' || !outcome) return null
   if (march.type === 'ATTACK') {
@@ -154,8 +170,10 @@ interface MarchRowProps {
   serverNowMs: number | null
   cancelPending: boolean
   processPending: boolean
+  withdrawPending: boolean
   onCancel: (march: MarchView) => void
   onProcess: (march: MarchView) => void
+  onWithdraw: (march: MarchView) => void
 }
 
 function MarchRow({
@@ -163,10 +181,13 @@ function MarchRow({
   serverNowMs,
   cancelPending,
   processPending,
+  withdrawPending,
   onCancel,
   onProcess,
+  onWithdraw,
 }: MarchRowProps) {
   const inFlight = march.status === 'EN_ROUTE' || march.status === 'RETURNING'
+  const stationed = march.status === 'ARRIVED'
   const targetMs = countdownTargetMs(march)
   const remainingSec =
     targetMs !== null && serverNowMs !== null ? (targetMs - serverNowMs) / 1000 : null
@@ -217,6 +238,15 @@ function MarchRow({
           ) : null}
           {march.status}
         </Badge>
+        {stationed ? (
+          <Badge
+            variant="outline"
+            className="shrink-0 gap-1 border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0 text-[9px] font-semibold text-cyan-300"
+          >
+            <span aria-hidden>🛡</span>
+            STATIONED
+          </Badge>
+        ) : null}
       </div>
 
       <p className="mt-1 text-[10px] text-zinc-500 [overflow-wrap:anywhere]">
@@ -253,7 +283,7 @@ function MarchRow({
         </p>
       )}
 
-      {march.cancellable || showProcess ? (
+      {march.cancellable || showProcess || stationed ? (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {march.cancellable ? (
             <Button
@@ -278,6 +308,17 @@ function MarchRow({
               {processPending ? '… CHECKING' : '[ CHECK PROGRESS ]'}
             </Button>
           ) : null}
+          {stationed ? (
+            <Button
+              size="sm"
+              className="min-h-[44px] border border-cyan-500/40 bg-cyan-500/10 px-3 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/20"
+              disabled={withdrawPending}
+              onClick={() => onWithdraw(march)}
+              aria-label={`Withdraw the stationed detachment from ${destinationText(march)}`}
+            >
+              {withdrawPending ? '… WITHDRAWING' : '[ WITHDRAW ]'}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </li>
@@ -298,6 +339,7 @@ export function MarchesSection({ signedIn }: { signedIn: boolean }) {
   } = useMarches({ enabled: signedIn })
   const cancel = useCancelMarch()
   const process = useProcessMarch()
+  const withdraw = useWithdrawMarch()
   const { toast } = useToast()
 
   const serverNowMs = useServerTickingClock(list)
@@ -347,6 +389,29 @@ export function MarchesSection({ signedIn }: { signedIn: boolean }) {
             (typed.code ? PROCESS_ERROR_TEXT[typed.code] : undefined) ??
             typed.message ??
             'Progress check failed — try again',
+          variant: 'destructive',
+        })
+      },
+    })
+  }
+
+  function handleWithdraw(march: MarchView) {
+    withdraw.mutate(march.id, {
+      onSuccess: (result) => {
+        toast({
+          title: `Withdrawal started — ${result.unitsReturning} units heading home`,
+          description:
+            'The detachment rides the march return leg and rejoins your army at homecoming.',
+        })
+      },
+      onError: (error) => {
+        const typed = error as Error & { code?: string }
+        toast({
+          title: 'Withdrawal refused',
+          description:
+            (typed.code ? WITHDRAW_ERROR_TEXT[typed.code] : undefined) ??
+            typed.message ??
+            'Withdrawal failed — try again',
           variant: 'destructive',
         })
       },
@@ -417,8 +482,10 @@ export function MarchesSection({ signedIn }: { signedIn: boolean }) {
                     serverNowMs={serverNowMs}
                     cancelPending={cancel.isPending}
                     processPending={process.isPending}
+                    withdrawPending={withdraw.isPending}
                     onCancel={handleCancel}
                     onProcess={handleProcess}
+                    onWithdraw={handleWithdraw}
                   />
                 ))}
               </ul>

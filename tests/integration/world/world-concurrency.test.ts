@@ -34,11 +34,11 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   )
 }
 
-const TG_PREFIX = '9100034'
+const TG_PREFIX = '9100055'
 const IP = '203.0.135.'
 let ipCounter = 1
 const nextIp = (): string => `${IP}${ipCounter++}`
-let tgCounter = 9100034001
+let tgCounter = 9100055001
 const nextTgId = (): string => String(tgCounter++)
 
 function buildInitData(telegramId: string): string {

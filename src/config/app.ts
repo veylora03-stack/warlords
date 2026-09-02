@@ -7,6 +7,6 @@
  */
 
 export const APP_NAME = 'WARLORDS'
-export const APP_VERSION = '0.22.0-phase33'
-export const APP_PHASE = 33
-export const APP_PHASE_LABEL = 'Phase 33 — March & Army Movement Engine'
+export const APP_VERSION = '0.23.0-phase34'
+export const APP_PHASE = 34
+export const APP_PHASE_LABEL = 'Phase 34 — Clans & Positional Territory Garrisons'

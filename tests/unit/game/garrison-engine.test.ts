@@ -11,14 +11,16 @@ import { describe, it, expect } from 'bun:test'
 import {
   distributeGarrisonLosses,
   sumContributionUnits,
-  capacityForTerritory,
   resolveGarrisonAuthorization,
   type GarrisonContributionManifest,
 } from '../../../src/lib/game/services/garrison.service'
 import { GARRISON, garrisonCapacity } from '../../../src/lib/game/config/garrison'
 import { CLAN } from '../../../src/lib/game/config/clan'
 import { joinPolicyOf, roleRank } from '../../../src/lib/game/services/clan.service'
-import { MARCH_TRANSITIONS, ACTIVE_MARCH_STATUSES } from '../../../src/lib/game/engine/march/movement'
+import {
+  MARCH_TRANSITIONS,
+  ACTIVE_MARCH_STATUSES,
+} from '../../../src/lib/game/engine/march/movement'
 
 function manifest(
   id: string,
@@ -121,7 +123,10 @@ describe('garrison loss distribution (deterministic casualty algebra)', () => {
   it('sumContributionUnits merges multi-contribution manifests exactly', () => {
     const totals = sumContributionUnits([
       [{ unitId: 'swordsman', count: 30 }],
-      [{ unitId: 'swordsman', count: 20 }, { unitId: 'archer', count: 5 }],
+      [
+        { unitId: 'swordsman', count: 20 },
+        { unitId: 'archer', count: 5 },
+      ],
     ])
     expect(totals).toEqual([
       { unitId: 'archer', count: 5 },
