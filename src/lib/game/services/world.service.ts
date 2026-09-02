@@ -1629,7 +1629,10 @@ export async function attackTerritory(
         defender: casualtyRows(sim.defenderSurvivors, unitNames),
       },
       spoils: Object.fromEntries(
-        Object.entries(resolution.spoils).map(([resource, amount]) => [resource, amount.toString()]),
+        Object.entries(resolution.spoils).map(([resource, amount]) => [
+          resource,
+          amount.toString(),
+        ]),
       ),
       honor: {
         attackerDelta: resolution.attackerHonorDelta,
