@@ -187,6 +187,38 @@ export const ACHIEVEMENTS: AchievementCatalogEntry[] = [
     target: 10,
     reward: { GEMS: 50, XP: 300 },
   },
+  // ── Phase 34 — clans & positional garrisons (STAT metrics recorded by
+  // clan.service / march.service) ──
+  {
+    id: 'ach-first-clan',
+    title: 'Sworn Banners',
+    description: 'Join your first clan. No warlord stands alone.',
+    category: 'SOCIAL',
+    metric: 'STAT',
+    meta: { statKey: 'clansJoined' },
+    target: 1,
+    reward: { GEMS: 10, XP: 60 },
+  },
+  {
+    id: 'ach-garrison-captain',
+    title: 'Garrison Captain',
+    description: 'Deploy your first positional garrison. Hold the line.',
+    category: 'MILITARY',
+    metric: 'STAT',
+    meta: { statKey: 'garrisonsDeployed' },
+    target: 1,
+    reward: { GEMS: 10, XP: 80 },
+  },
+  {
+    id: 'ach-garrison-general',
+    title: 'Garrison General',
+    description: 'Deploy 10 positional garrisons. The map remembers who digs in.',
+    category: 'MILITARY',
+    metric: 'STAT',
+    meta: { statKey: 'garrisonsDeployed' },
+    target: 10,
+    reward: { GEMS: 50, XP: 300 },
+  },
   {
     id: 'ach-veteran-commander',
     title: 'Veteran Commander',

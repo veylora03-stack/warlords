@@ -125,6 +125,7 @@ model Player {
   quests                PlayerQuest[]
   achievements          PlayerAchievement[]
   marches               March[]             @relation("MarchOwner")
+  garrisonContributions TerritoryGarrison[]
   marchesTargetingMe    March[]             @relation("MarchTarget")
   territories           Territory[]         @relation("TerritoryOwner")
   battlesAsAttacker     Battle[]            @relation("BattleAttacker")
@@ -353,11 +354,48 @@ model March {
   targetPlayer Player?     @relation("MarchTarget", fields: [targetPlayerId], references: [id], onDelete: SetNull)
   territory    Territory?  @relation(fields: [territoryId], references: [id], onDelete: SetNull)
   battle       Battle?     @relation(fields: [battleId], references: [id], onDelete: SetNull)
+  garrison     TerritoryGarrison?
 
   @@index([arrivesAt, status])
   @@index([playerId, status])
   @@index([territoryId])
   @@map("marches")
+}
+
+/// Phase 34 — POSITIONAL garrison contribution. One row per deployed march
+/// (the march manifest IS the contribution identity: committed stacks live on
+/// March.units, current survivors here). A territory is "garrisoned" while it
+/// holds ≥1 row; the aggregate defense strength is the sum of `units`.
+///
+/// Lifecycle (STEP 27 — minimal persistence; the MARCH row carries the state
+/// machine, so no status column and no transient states are stored here):
+///   created          ← DEFEND/REINFORCE arrival (march EN_ROUTE → ARRIVED)
+///   units mutated    ← battle settlement ONLY (deterministic casualty
+///                      distribution) — a fully-destroyed row is deleted and
+///                      its march transitions ARRIVED → LOST
+///   deleted          ← withdrawal claim (march ARRIVED → RETURNING; the
+///                      existing homecoming processor restores the units) or
+///                      territory capture (garrison routed) or season strip
+///
+/// `clanId` is the contributor's clan AT DEPLOYMENT — an audit snapshot only
+/// (answers "which clan contributed"), never an authorization source.
+model TerritoryGarrison {
+  id          String   @id @default(cuid())
+  territoryId String
+  playerId    String
+  marchId     String   @unique
+  clanId      String?
+  units       Json // [{unitId, count}] current survivors — written only inside locked transactions
+  deployedAt  DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  territory Territory @relation(fields: [territoryId], references: [id], onDelete: Cascade)
+  player    Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  march     March     @relation(fields: [marchId], references: [id], onDelete: Cascade)
+
+  @@index([territoryId])
+  @@index([playerId])
+  @@map("territory_garrisons")
 }
 
 // ────────────────────────────────────── COMMANDERS, ITEMS & EQUIPMENT ───────
@@ -536,6 +574,7 @@ model Territory {
   battles      Battle[]
   scoutReports ScoutReport[]
   history      TerritoryHistory[]
+  garrisons    TerritoryGarrison[]
 
   @@unique([x, y])
   @@index([ownerPlayerId])

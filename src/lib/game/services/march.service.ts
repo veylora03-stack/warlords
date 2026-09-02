@@ -51,6 +51,7 @@ import { withKeyLock } from '@/lib/concurrency/mutex'
 import { withWriteRetry } from './player-registration.service'
 import type { Tx } from './player-bootstrap.service'
 import { MARCH, marchTravelSeconds, scoutSpeedBonusBps } from '@/lib/game/config/march'
+import { GARRISON } from '@/lib/game/config/garrison'
 import { WORLD } from '@/lib/game/config/world'
 import { BATTLE } from '@/lib/game/config/battle'
 import type { TerrainType, BattleSide } from '@/lib/game/types/battle'
@@ -74,6 +75,13 @@ import {
   terrainDefenseModifiers,
 } from './world.service'
 import { garrisonFor, adjacentCoords } from '@/lib/game/engine/world/generator'
+import {
+  capacityForTerritory,
+  deployGarrisonInTx,
+  loadGarrisonDefenseInTx,
+  resolveGarrisonAuthorization,
+  type GarrisonContributionManifest,
+} from './garrison.service'
 import { effectsFor } from '@/lib/game/config/buildings'
 import { syncPlayerEnergy } from './energy.service'
 import { resolveSeasonStateInTx } from './season.service'
@@ -203,6 +211,17 @@ export interface MarchOutcomeView {
   unitsLost?: number
   /** Server-written destination coords (used by homecoming notifications). */
   destinationCoord?: { x: number; y: number }
+  // Phase 34 — positional garrison lifecycle markers (server-written only).
+  /** The detachment is stationed in a TerritoryGarrison (march is ARRIVED). */
+  garrisoned?: boolean
+  /** The player withdrew the detachment (return leg started by withdrawal). */
+  withdrawn?: boolean
+  /** Season settlement ended the deployment (detachments released home). */
+  seasonReset?: boolean
+  /** A battle destroyed this contribution entirely (march → LOST). */
+  garrisonDestroyed?: boolean
+  /** The territory fell and the surviving garrison was routed (march → LOST). */
+  garrisonRouted?: boolean
 }
 
 export interface MarchView {
@@ -404,7 +423,7 @@ export async function createMarch(playerId: string, input: CreateMarchInput): Pr
     // ── Player & season ────────────────────────────────────────────────────
     const player = await tx.player.findUnique({
       where: { id: playerId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, clanId: true },
     })
     if (!player) throw new AppError('PLAYER_NOT_FOUND', 'Player not found')
 
@@ -426,6 +445,7 @@ export async function createMarch(playerId: string, input: CreateMarchInput): Pr
         ownerType: true,
         ownerPlayerId: true,
         isCapital: true,
+        strategicValue: true,
       },
     })
     if (!territory) throw new AppError('TERRITORY_NOT_FOUND', 'Territory not found')
@@ -460,14 +480,49 @@ export async function createMarch(playerId: string, input: CreateMarchInput): Pr
       // No adjacency requirement — reconnaissance rides beyond the front line.
       // The travel-time clamp bounds the range.
     } else {
-      // DEFEND / REINFORCE — the destination must be the caller's OWN
-      // territory. Foreign garrisons are not architecturally supported (the
-      // defense model is realm-wide); refusing beats faking one.
-      if (territory.ownerPlayerId !== playerId) {
-        throw new AppError(
-          'MARCH_DESTINATION_NOT_OWNED',
-          'You can only send DEFEND/REINFORCE marches to your own territories',
-        )
+      // DEFEND / REINFORCE — positional-garrison deployment (Phase 34).
+      // DEFEND stations a detachment on the caller's OWN territory.
+      // REINFORCE additionally allows a SAME-CLAN comrade of the owner to
+      // reinforce. Authorization is resolved server-side from CURRENT clan
+      // membership (Phase 34 contract; foreign garrisons stay refused).
+      const authorization = resolveGarrisonAuthorization({
+        type,
+        playerId,
+        playerClanId: player.clanId,
+        territoryOwnerPlayerId: territory.ownerPlayerId,
+        territoryOwnerClanId: null, // owner clan resolved below for REINFORCE
+      })
+      if (type === 'DEFEND') {
+        if (!authorization.authorized) {
+          throw new AppError(
+            'MARCH_DESTINATION_NOT_OWNED',
+            'You can only send DEFEND marches to your own territories',
+          )
+        }
+      } else {
+        if (territory.ownerPlayerId === playerId) {
+          // Reinforcing your own holding is the same garrison pool.
+        } else {
+          const owner = territory.ownerPlayerId
+            ? await tx.player.findUnique({
+                where: { id: territory.ownerPlayerId },
+                select: { clanId: true },
+              })
+            : null
+          const reinforced = resolveGarrisonAuthorization({
+            type,
+            playerId,
+            playerClanId: player.clanId,
+            territoryOwnerPlayerId: territory.ownerPlayerId,
+            territoryOwnerClanId: owner?.clanId ?? null,
+          })
+          if (!reinforced.authorized) {
+            throw new AppError(
+              'MARCH_DESTINATION_NOT_OWNED',
+              'REINFORCE marches require a territory owned by your own clan',
+            )
+          }
+        }
       }
     }
 
@@ -478,6 +533,32 @@ export async function createMarch(playerId: string, input: CreateMarchInput): Pr
     })
     if (!origin) {
       throw new AppError('MARCH_ORIGIN_NOT_FOUND', 'Marches require a capital to march from')
+    }
+
+    // ── Garrison capacity (Phase 34 — soft pre-check at creation) ──────────
+    // Re-checked authoritatively at arrival: the garrison can change while
+    // the march travels. An over-capacity arrival bounces home (never splits).
+    if (type === 'DEFEND' || type === 'REINFORCE') {
+      const capacity = capacityForTerritory(territory.strategicValue)
+      const stationed = await tx.territoryGarrison.findMany({
+        where: { territoryId },
+        select: { units: true },
+      })
+      const currentTotal = stationed.reduce(
+        (sum, row) => sum + totalUnits(readStoredStacks(row.units)),
+        0,
+      )
+      const committedTotal = totalUnits(stacks)
+      if (
+        currentTotal + committedTotal > capacity ||
+        stationed.length + 1 > GARRISON.maxContributionsPerTerritory
+      ) {
+        throw new AppError(
+          'MARCH_GARRISON_FULL',
+          `Garrison capacity exceeded: ${currentTotal}/${capacity} stationed, ${committedTotal} more requested`,
+          { capacity, stationed: currentTotal, requested: committedTotal },
+        )
+      }
     }
 
     // ── March slots (CASTLE — the reserved building effect) ────────────────
@@ -767,6 +848,182 @@ export async function cancelMarch(playerId: string, marchId: string): Promise<Ca
   })
 }
 
+// ── Garrison withdrawal (Phase 34 — positional detachment recall) ────────────
+
+export interface WithdrawGarrisonResult {
+  march: MarchView
+  unitsReturning: number
+}
+
+/**
+ * Recalls a STATIONED positional detachment home. The march must be ARRIVED
+ * (delivered to a TerritoryGarrison and still holding a contribution row).
+ *
+ * Exactly-once: the conditional ARRIVED → RETURNING claim is the arbiter —
+ * a racing battle settlement that destroys the contribution transitions the
+ * march to LOST first, so the claim hits 0 rows and the withdrawal refuses
+ * (dead troops can never be withdrawn). Surviving units ride the EXISTING
+ * return-leg/homecoming machinery: survivors = the CURRENT contribution
+ * manifest (post-battle), restoration happens exactly once in processReturnInTx.
+ *
+ * Concurrency: same lock order as every march mutation (march:engine →
+ * db:write); battles serialize through db:write, so the contribution read,
+ * the claim and the delete are atomic against any battle outcome.
+ */
+export async function withdrawGarrison(
+  playerId: string,
+  marchId: string,
+): Promise<WithdrawGarrisonResult> {
+  if (typeof marchId !== 'string' || marchId.length === 0 || marchId.length > 64) {
+    throw new AppError('MARCH_NOT_FOUND', 'March not found')
+  }
+  const now = new Date()
+  return runMarchTransaction(async (tx) => {
+    const row = await tx.march.findUnique({
+      where: { id: marchId },
+      include: MARCH_INCLUDE,
+    })
+    if (!row || row.playerId !== playerId) {
+      // Foreign march ids are a NOT_FOUND — never a leak (Phase 33 rule).
+      throw new AppError('MARCH_NOT_FOUND', 'March not found')
+    }
+    if (row.status !== 'ARRIVED') {
+      throw new AppError(
+        'MARCH_NOT_WITHDRAWABLE',
+        'Only a stationed garrison march can be withdrawn',
+        { status: row.status },
+      )
+    }
+    const contribution = await tx.territoryGarrison.findUnique({
+      where: { marchId },
+      select: { id: true, units: true, territoryId: true },
+    })
+    if (!contribution) {
+      // Invariant: an ARRIVED march always holds its contribution (the
+      // battle settlement that deletes the row also transitions the march).
+      throw new AppError('INTERNAL_ERROR', 'Stationed march has no garrison contribution')
+    }
+
+    // The exactly-once arbiter: conditional ARRIVED → RETURNING.
+    const claim = await tx.march.updateMany({
+      where: { id: marchId, playerId, status: 'ARRIVED' },
+      data: { status: 'RETURNING' },
+    })
+    if (claim.count !== 1) {
+      throw new AppError(
+        'MARCH_NOT_WITHDRAWABLE',
+        'The garrison march can no longer be withdrawn (battle settled it)',
+        { status: row.status },
+      )
+    }
+
+    // Release the positional contribution — the survivors ride home.
+    const survivors = readStoredStacks(contribution.units)
+    const deleted = await tx.territoryGarrison.deleteMany({ where: { id: contribution.id } })
+    if (deleted.count !== 1) {
+      throw new AppError('INTERNAL_ERROR', 'Garrison contribution vanished mid-withdrawal')
+    }
+
+    const destinationCoord = {
+      x: row.territory?.x ?? row.originX,
+      y: row.territory?.y ?? row.originY,
+    }
+    const priorOutcome = outcomeView(row.outcome)
+    await startReturnLeg(
+      tx,
+      row,
+      destinationCoord,
+      now,
+      survivors,
+      { ...priorOutcome, withdrawn: true, destinationCoord },
+      null,
+      false,
+    )
+    await recordPlayerStats(tx, playerId, { garrisonWithdrawals: 1 })
+    await enqueueNotificationInTx(tx, {
+      playerId,
+      type: 'GARRISON_WITHDRAWN',
+      dedupeKey: notificationDedupeKeys.garrisonWithdrawn(marchId),
+      payload: {
+        marchId,
+        territoryId: contribution.territoryId,
+        coord: destinationCoord,
+        unitsReturning: totalUnits(survivors),
+      },
+    })
+
+    const fresh = await tx.march.findUnique({ where: { id: marchId }, include: MARCH_INCLUDE })
+    if (!fresh) throw new AppError('MARCH_NOT_FOUND', 'March not found')
+    log.info('garrison withdrawn', { marchId, playerId, unitsReturning: totalUnits(survivors) })
+    return {
+      march: toMarchView(fresh, await loadUnitNames(tx), now),
+      unitsReturning: totalUnits(survivors),
+    }
+  })
+}
+
+/**
+ * Phase 34 — SEASON SETTLEMENT hook: every stationed detachment on the given
+ * (stripped) territories marches home through the EXISTING return leg.
+ * Conditional ARRIVED → RETURNING claims keep this idempotent against races;
+ * contributions are released and homecoming restores the survivors.
+ * Returns the number of detachments released.
+ */
+export async function releaseTerritoryGarrisonsInTx(
+  tx: Tx,
+  territoryIds: readonly string[],
+  now: Date,
+): Promise<number> {
+  if (territoryIds.length === 0) return 0
+  const coords = new Map(
+    (
+      await tx.territory.findMany({
+        where: { id: { in: [...territoryIds] } },
+        select: { id: true, x: true, y: true },
+      })
+    ).map((row) => [row.id, { x: row.x, y: row.y }]),
+  )
+  const contributions = await tx.territoryGarrison.findMany({
+    where: { territoryId: { in: [...territoryIds] } },
+    select: { id: true, marchId: true, territoryId: true, units: true },
+  })
+  let released = 0
+  for (const contribution of contributions) {
+    const claim = await tx.march.updateMany({
+      where: { id: contribution.marchId, status: 'ARRIVED' },
+      data: { status: 'RETURNING' },
+    })
+    if (claim.count !== 1) continue // raced withdrawal/battle — not ours anymore
+    const deleted = await tx.territoryGarrison.deleteMany({ where: { id: contribution.id } })
+    if (deleted.count !== 1) {
+      throw new AppError('INTERNAL_ERROR', 'Season garrison release invariant violated')
+    }
+    const march = await tx.march.findUnique({
+      where: { id: contribution.marchId },
+      select: { id: true, playerId: true, type: true, originX: true, originY: true },
+    })
+    if (!march) {
+      throw new AppError('INTERNAL_ERROR', 'Released garrison march vanished mid-settlement')
+    }
+    const destinationCoord = coords.get(contribution.territoryId) ?? {
+      x: march.originX,
+      y: march.originY,
+    }
+    await startReturnLeg(
+      tx,
+      march,
+      destinationCoord,
+      now,
+      readStoredStacks(contribution.units),
+      { withdrawn: true, seasonReset: true, destinationCoord },
+      null,
+      false,
+    )
+    released += 1
+  }
+  return released
+}
+
 // ── Processing (the lazy arrival/homecoming engine) ──────────────────────────
 
 export interface ProcessMarchResult {
@@ -940,51 +1197,167 @@ export async function processArrivalInTx(tx: Tx, marchId: string, now: Date): Pr
   const territory = march.territory
   const destinationCoord = { x: territory.x, y: territory.y }
 
-  // ── DEFEND / REINFORCE: deliver the detachment to the caller's holding ──
+  // ── DEFEND / REINFORCE: station the detachment as a positional garrison ──
   if (march.type === 'DEFEND' || march.type === 'REINFORCE') {
-    if (territory.ownerPlayerId !== march.playerId || territory.status === 'LOCKED') {
-      // Destination no longer ours (e.g. season settlement stripped it
-      // mid-flight) — the detachment turns around and heads home.
+    // Re-validate authorization against CURRENT state (ownership, clan
+    // membership and lock state may all have changed mid-flight).
+    const player = await tx.player.findUnique({
+      where: { id: march.playerId },
+      select: { name: true, clanId: true },
+    })
+    if (!player) {
+      // The marcher vanished mid-flight — the detachment turns around.
       await startReturnLeg(
         tx,
         march,
         destinationCoord,
         now,
         committed,
-        { aborted: 'DESTINATION_NO_LONGER_OURS' },
+        { aborted: 'MARCHER_GONE' },
         null,
         false,
       )
       return true
     }
-    // Realm-wide defense model: the arriving units BECOME the defense pool —
-    // restoring them to the home army IS the delivery (documented contract).
-    await restoreStacks(tx, march.playerId, committed)
+    const owner = territory.ownerPlayerId
+      ? await tx.player.findUnique({
+          where: { id: territory.ownerPlayerId },
+          select: { id: true, clanId: true },
+        })
+      : null
+    const authorization = resolveGarrisonAuthorization({
+      type: march.type,
+      playerId: march.playerId,
+      playerClanId: player.clanId,
+      territoryOwnerPlayerId: territory.ownerPlayerId,
+      territoryOwnerClanId: owner?.clanId ?? null,
+    })
+    if (
+      territory.status === 'LOCKED' ||
+      !authorization.authorized ||
+      (march.type === 'DEFEND' && territory.ownerPlayerId !== march.playerId)
+    ) {
+      // Destination no longer ours/authorized (season settlement, capture,
+      // clan departure…) — the detachment turns around and heads home.
+      await startReturnLeg(
+        tx,
+        march,
+        destinationCoord,
+        now,
+        committed,
+        {
+          aborted:
+            march.type === 'DEFEND' ? 'DESTINATION_NO_LONGER_OURS' : 'DESTINATION_NOT_AUTHORIZED',
+        },
+        null,
+        false,
+      )
+      return true
+    }
+
+    // Capacity re-check (STEP 9 — the garrison may have grown mid-flight).
+    const capacity = capacityForTerritory(territory.strategicValue)
+    const stationedRows = await tx.territoryGarrison.findMany({
+      where: { territoryId: territory.id },
+      select: { units: true },
+    })
+    const stationedTotal = stationedRows.reduce(
+      (sum, row) => sum + totalUnits(readStoredStacks(row.units)),
+      0,
+    )
+    if (
+      stationedTotal + totalUnits(committed) > capacity ||
+      stationedRows.length + 1 > GARRISON.maxContributionsPerTerritory
+    ) {
+      // Over-capacity arrival — the WHOLE detachment bounces home (units are
+      // never split or dropped; documented Phase 34 policy).
+      await startReturnLeg(
+        tx,
+        march,
+        destinationCoord,
+        now,
+        committed,
+        { aborted: 'GARRISON_CAPACITY_EXCEEDED' },
+        null,
+        false,
+      )
+      return true
+    }
+
+    // Deploy: the arriving units BECOME the positional defense (Phase 34).
+    // The march parks on ARRIVED — withdrawal later claims ARRIVED →
+    // RETURNING and the homecoming processor restores the survivors.
+    await deployGarrisonInTx(tx, {
+      marchId,
+      territoryId: territory.id,
+      playerId: march.playerId,
+      clanId: player.clanId,
+      committed,
+      now,
+    })
     await tx.march.update({
       where: { id: marchId },
       data: {
-        status: 'COMPLETED',
-        completedAt: now,
+        status: 'ARRIVED',
         survivors: committed as unknown as Prisma.InputJsonValue,
         outcome: {
           delivered: true,
+          garrisoned: true,
           destinationCoord,
         } as unknown as Prisma.InputJsonValue,
       },
     })
-    await recordPlayerStats(tx, march.playerId, { marchesCompleted: 1 })
+    await recordPlayerStats(tx, march.playerId, { garrisonsDeployed: 1 })
     await applyQuestEventInTx(
       tx,
       march.playerId,
       {
-        kind: 'MARCH_COMPLETED',
+        kind: 'GARRISON_DEPLOYED',
         marchId,
-        action: march.type as 'ATTACK' | 'DEFEND' | 'SCOUT' | 'REINFORCE',
+        territoryId: territory.id,
+        action: march.type,
       },
       now,
     )
     await evaluateAchievementsInTx(tx, march.playerId, {}, now)
-    log.info('march delivered', { marchId, playerId: march.playerId, type: march.type })
+    // Deployer confirmation (+ owner alert on foreign reinforcement).
+    await enqueueNotificationInTx(tx, {
+      playerId: march.playerId,
+      type: 'GARRISON_DEPLOYED',
+      dedupeKey: notificationDedupeKeys.garrisonDeployed(marchId, march.playerId),
+      payload: {
+        marchId,
+        action: march.type,
+        territoryId: territory.id,
+        coord: destinationCoord,
+        unitsDeployed: totalUnits(committed),
+      },
+    })
+    if (
+      march.type === 'REINFORCE' &&
+      territory.ownerPlayerId !== null &&
+      territory.ownerPlayerId !== march.playerId
+    ) {
+      await enqueueNotificationInTx(tx, {
+        playerId: territory.ownerPlayerId,
+        type: 'GARRISON_DEPLOYED',
+        dedupeKey: notificationDedupeKeys.garrisonDeployed(marchId, territory.ownerPlayerId),
+        payload: {
+          marchId,
+          action: march.type,
+          territoryId: territory.id,
+          coord: destinationCoord,
+          unitsDeployed: totalUnits(committed),
+          contributorName: player.name,
+        },
+      })
+    }
+    log.info('march deployed to garrison', {
+      marchId,
+      playerId: march.playerId,
+      type: march.type,
+      territoryId: territory.id,
+    })
     return true
   }
 
@@ -1172,10 +1545,16 @@ async function resolveMarchAssaultInTx(
   }
 
   // ── Defender side from CURRENT state (identical rules to direct assaults) ─
+  // Owned territory: the POSITIONAL garrison defends when one exists
+  // (Phase 34); otherwise the realm-wide army defends (Phase 33 contract).
+  // Unclaimed: the deterministic virtual garrison (unchanged).
   let defenderSide: { side: BattleSide; totalCount: number; names: Map<string, string> }
   let defenderPlayerId: string | null = null
   let defenderPlayerName: string | null = null
   let defenderWasReal = false
+  // Positional garrison contributions defending this territory (Phase 34) —
+  // non-null routes defender casualties to the garrison, not player_units.
+  let marchDefenderGarrison: GarrisonContributionManifest[] | null = null
 
   if (territory.ownerPlayerId !== null) {
     defenderWasReal = true
@@ -1199,14 +1578,34 @@ async function resolveMarchAssaultInTx(
       return
     }
     defenderPlayerName = owner.name
-    defenderSide = await loadArmySide(
-      tx,
-      owner.id,
-      owner.name,
-      terrainDefenseModifiers(territory.terrain),
-      0,
-      BATTLE.casualties.defenderHospitalBps,
-    )
+    const positional = await loadGarrisonDefenseInTx(tx, territory.id)
+    if (positional) {
+      // Positional defense: garrison stacks stand; their losses settle
+      // against the CONTRIBUTIONS (not player_units) inside the shared
+      // assault pipeline via defender.garrison.
+      defenderSide = {
+        side: {
+          playerId: owner.id,
+          name: owner.name,
+          stacks: positional.stacks,
+          modifiers: terrainDefenseModifiers(territory.terrain),
+          wallLevel: 0,
+          hospitalBps: 0,
+        },
+        totalCount: positional.totalCount,
+        names: positional.names,
+      }
+      marchDefenderGarrison = positional.manifests
+    } else {
+      defenderSide = await loadArmySide(
+        tx,
+        owner.id,
+        owner.name,
+        terrainDefenseModifiers(territory.terrain),
+        0,
+        BATTLE.casualties.defenderHospitalBps,
+      )
+    }
   } else {
     const garrisonCatalog = await loadGarrisonCatalog(tx)
     const garrisonStacks = garrisonFor(
@@ -1297,6 +1696,7 @@ async function resolveMarchAssaultInTx(
       playerId: defenderPlayerId,
       name: defenderPlayerName,
       wasReal: defenderWasReal,
+      garrison: marchDefenderGarrison,
     },
     seed,
     unguarded,

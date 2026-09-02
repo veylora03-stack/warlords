@@ -249,3 +249,37 @@ Work Log:
 
 Stage Summary:
 - FINAL VERDICT: 🟢 MARCH SYSTEM PRODUCTION READY (backend pipelines exactly-once and battle-integrated; 72 new tests across unit/integration/security/concurrency/load/e2e; browser-verified live; all existing engines reused — zero duplication)
+---
+Task ID: 1
+Agent: Z.ai Code (lead)
+Task: PHASE 34 — Repository INSPECT + BASELINE verification
+
+Work Log:
+- Verified HEAD 73151c7 (Phase 33 March Engine), branch main, clean tree; lineage 0d1d7fc(32) → 73151c7(33).
+- Sandbox env had been reset: .env truncated to DATABASE_URL only, db/ missing → tests failed on missing TELEGRAM_BOT_TOKEN/JWT_SECRET/DB. Restored .env per .env.example, ran prisma migrate deploy (all committed migrations), db:seed, fixed ADMIN_TELEGRAM_IDS allowlist (tests need 9100000001).
+- Deep inspection via 3 Explore agents + direct reads: march.service (createMarch 12-step, CAS reservation, restoreStacks, DEFEND/REINFORCE arrival currently restores to home army = realm-wide defense model), march-processor facade, world.service (resolveTerritoryAssaultInTx shared assault pipeline, attackTerritory with battle:engine lock, garrisonFor virtual NPC garrison, defenderWasReal semantics, capture flip + history), battle.service (loadArmySide/toBattleStack/battleConfigSnapshot), quest/achievement/stats/power/notification/economy/season services, route conventions (defineRoute/requirePlayer/AppError codes incl. reserved CLAN_*), IdempotencyKey pattern, lock order conventions (engine → db:write), tests structure (bun test, purgeTestUsersByTelegramPrefix, per-suite telegram prefixes).
+- KEY FINDING: Territory has NO clanId column (recon correction — the clanId at schema line 1158 belongs to Announcement). Clan/ClanMember/ClanInvitation contract models exist (Phase 2) + Player.clanId/clanRole denormalized + JOIN_CLAN inert objective + CLAN_INVITE notification + 5 reserved error codes. No player-facing clan service/API/UI. No TerritoryGarrison anywhere.
+- Baseline run: unit 409/409, integration 377/377 (needs live dev server on :3000 for 7 HTTP tests), e2e 72/72 → 858/858 GREEN == expected historical baseline. typecheck clean, eslint clean, db:verify green; prettier had 3 drifts (2 stray tmp scripts + world.service.ts) → removed/formatted, committed hygiene commit 00293d0.
+
+Stage Summary:
+- Baseline pristine at 00293d0: 858/858, all gates green. Phase 33 march contract + shared assault pipeline fully mapped. Design for Phase 34 follows in Task 2.
+---
+Task ID: 2
+Agent: Z.ai Code (lead)
+Task: PHASE 34 — DESIGN (Clans + Positional Territory Garrisons)
+
+Work Log (design decisions):
+- SCHEMA: new model TerritoryGarrison = one row per deployed march (contribution record). Fields: territoryId, playerId, marchId @unique, clanId (audit snapshot at deployment), units Json [{unitId,count}] = CURRENT survivors, deployedAt. NO status column (march carries lifecycle: EN_ROUTE=deploying, ARRIVED=active, RETURNING=withdrawing, LOST=destroyed — STEP 27 minimal persistence). NO version column (db:write serialization + conditional claims arbitrate; documented). Additive migration, SQLite+PG twins.
+- CLAN: reuse Phase 2 contract models as-is (Clan/ClanMember/ClanInvitation + Player.clanId/clanRole sync). New config/clan.ts: name 3-24, tag 2-5 [A-Z0-9], maxMembers 50, invite TTL 24h, joinPolicy OPEN|INVITE_ONLY (settings JSON, default OPEN). Role matrix: LEADER>OFFICER>MEMBER; join via OPEN policy or claimed invitation; leave blocked for leader without transfer; invite=OFFICER+; remove=OFFICER on MEMBER only; promote/demote=LEADER (MEMBER<->OFFICER); transfer=LEADER->member (old leader -> OFFICER). State-guarded idempotency (replays hit typed 409s); CLAN_CREATE idempotency key. New clan:engine lock.
+- CAPACITY (STEP 9, minimal documented): config/garrison.ts GARRISON v1 { capacityBase 400, capacityPerStrategicValue 250, maxContributionsPerTerritory 20 }; capacity = base + perSV * territory.strategicValue (existing field, no new progression). Pre-check at createMarch, hard re-check at arrival (exceed -> full detachment returns home, aborted GARRISON_CAPACITY_EXCEEDED).
+- MARCH ENGINE: MARCH_TRANSITIONS gains ARRIVED -> [RETURNING, LOST] (withdrawal claim; battle destruction). DEFEND arrival: owner must still be march.playerId -> create contribution, march -> ARRIVED (reserved status now used). REINFORCE arrival: territory owned + owner.clan === marcher.clan (re-read in-tx; stale-authorizations bounce home, aborted DESTINATION_NOT_AUTHORIZED). Quest MARCH_COMPLETED fired at DELIVERY (event identity march:{id} prevents double-count at homecoming); new GARRISON_DEPLOYED event. Withdrawal: new withdrawGarrison(playerId, marchId) — conditional claim ARRIVED->RETURNING sets survivors=contribution.units, deletes contribution, computes returnsAt via existing travel math; homecoming processor (unchanged) restores exactly once. Battle-destroyed contribution -> march ARRIVED->LOST outcome garrisonDestroyed.
+- BATTLE (single engine, simulator untouched): defender construction for OWNED territories becomes 2-tier: positional garrison first (contributions exist -> garrison stacks defend, wasReal=true, credit owner), else realm-wide loadArmySide (Phase 33 preserved); unclaimed -> virtual garrisonFor (unchanged). resolveTerritoryAssaultInTx defender ctx gains optional garrison contributions; casualty block routes to applyGarrisonCasualtiesInTx (deterministic proportional loss distribution across contributions, fixed deployedAt/id order, exact totals); attacker capture -> destroyGarrisonInTx (contributions deleted, marches -> LOST garrisonRouted).
+- INVARIANTS (STEP 17): per contribution destroyed+surviving==committed; garrison total == sum(contributions); units conserved (march manifest -> garrison -> survivors -> home); no creation from nothing; destruction only via battle settlement.
+- LOCKS: arrival=march:engine->db:write (existing); battle=battle:engine->db:write (existing); withdrawal=march:engine->db:write (new); clan=clan:engine->db:write (new). db:write serializes tx bodies; conditional claims arbitrate logical races C1-C9.
+- CATALOGS: quest events CLAN_CREATED/CLAN_JOINED/GARRISON_DEPLOYED (+ JOIN_CLAN objective activated — the inert test is updated to assert real consumption); stats clansJoined/garrisonsDeployed/garrisonWithdrawals; achievements ach-first-clan/ach-garrison-captain/ach-garrison-general; notifications CLAN_JOINED/CLAN_LEADERSHIP_CHANGED/GARRISON_DEPLOYED/GARRISON_WITHDRAWN/GARRISON_DESTROYED (+ existing CLAN_INVITE); error codes CLAN_NAME_TAKEN/CLAN_TAG_TAKEN/CLAN_FULL/CLAN_LEADER_SUCCESSION/CLAN_INVITATION_INVALID/MARCH_GARRISON_FULL/MARCH_NOT_WITHDRAWABLE/GARRISON_NOT_FOUND.
+- API: /api/v1/clans CRUD+membership (POST /, GET /, GET /[id], POST /[id]/join|leave|invite|transfer, POST /[id]/members/[playerId]/role|remove, GET /invitations); garrison POST/GET /api/v1/world/territories/[id]/garrison + POST .../garrison/withdraw; POST /api/v1/marches/[id]/withdraw. Deployment ALWAYS flows through createMarch (one march engine).
+- SEASON SETTLEMENT: TERRITORY_OWNERSHIP strip also returns garrisoned detachments (ARRIVED->RETURNING via existing startReturnLeg) + deletes contributions.
+- UI: clans panel + territory garrison panel (strength/capacity/contributors/owner clan) + marches STATIONED/WITHDRAW + launch panel DEFEND/REINFORCE; world map garrison badge.
+
+Stage Summary:
+- Design recorded. Implementation order: schema/migrations -> garrison config+service -> march engine -> battle integration -> clan service+catalogs -> APIs -> tests -> UI.

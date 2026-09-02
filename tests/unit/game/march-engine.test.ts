@@ -265,12 +265,15 @@ describe('march state machine', () => {
     expect(isMarchTransition('EN_ROUTE', 'LOST')).toBe(false)
   })
 
-  it('terminals never leave; ARRIVED stays reserved', () => {
+  it('terminals never leave; ARRIVED is live (garrisoned detachments)', () => {
     for (const terminal of ['COMPLETED', 'CANCELLED', 'LOST'] as MarchStatus[]) {
       expect(isTerminalMarchStatus(terminal)).toBe(true)
       expect(MARCH_TRANSITIONS[terminal]).toHaveLength(0)
     }
-    expect(MARCH_TRANSITIONS.ARRIVED).toHaveLength(0) // reserved, never persisted
+    // Phase 34: ARRIVED is a LIVE stationed state — a delivered DEFEND/
+    // REINFORCE detachment parks here until withdrawal or battle routing.
+    expect(MARCH_TRANSITIONS.ARRIVED).toEqual(['RETURNING', 'LOST'])
+    expect(isTerminalMarchStatus('ARRIVED')).toBe(false)
     expect(isTerminalMarchStatus('EN_ROUTE')).toBe(false)
     expect(isTerminalMarchStatus('RETURNING')).toBe(false)
   })
@@ -283,6 +286,8 @@ describe('march state machine', () => {
   })
 
   it('active statuses (slot capacity) are exactly EN_ROUTE/RESOLVING/RETURNING', () => {
+    // Phase 34: stationed (ARRIVED) detachments are STATIONARY — they consume
+    // no march slot (bounded by garrison capacity instead).
     expect(ACTIVE_MARCH_STATUSES).toEqual(['EN_ROUTE', 'RESOLVING', 'RETURNING'])
   })
 

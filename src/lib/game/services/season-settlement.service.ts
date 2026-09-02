@@ -38,6 +38,7 @@ import { ECONOMY_TX_OPTIONS } from './economy.service'
 import { enqueueNotificationFanOutInTx } from './notification.service'
 import { notificationDedupeKeys } from '@/lib/game/config/notifications'
 import { resolveSeasonStateInTx, seasonRulesOrThrow, type SeasonRow } from './season.service'
+import { releaseTerritoryGarrisonsInTx } from './march.service'
 import {
   SEASONAL_RESET_CATALOG,
   type SeasonRewardTier,
@@ -356,6 +357,7 @@ export async function executeSettlementInTx(
   const wipe = {
     seasonPointsReset: 0,
     territoriesStripped: 0,
+    garrisonsReleased: 0,
     seasonWalletsDeleted: 0,
     seasonalCommandersDeleted: 0,
   }
@@ -371,11 +373,19 @@ export async function executeSettlementInTx(
         // permanent (server rule) and survive every settlement. Each strip
         // lands an append-only TerritoryHistory row (reason SEASON_RESET) so
         // the ownership audit trail stays complete across seasons.
+        // Phase 34: stationed detachments on stripped territories march home
+        // through the existing return leg (mobilization ends with the season).
         const stripped = await tx.territory.findMany({
           where: { ownerPlayerId: { not: null }, isCapital: false },
           select: { id: true, ownerPlayerId: true, ownerType: true },
         })
         if (stripped.length > 0) {
+          const releasedGarrisons = await releaseTerritoryGarrisonsInTx(
+            tx,
+            stripped.map((row) => row.id),
+            now,
+          )
+          wipe.garrisonsReleased = releasedGarrisons
           await tx.territory.updateMany({
             where: { id: { in: stripped.map((row) => row.id) } },
             data: {

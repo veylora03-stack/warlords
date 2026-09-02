@@ -797,10 +797,9 @@ describe('March system (create → travel → assault → return → restore)', 
     expect(recon!.instance!.progress).toBe(1)
   })
 
-  it('10 — REINFORCE delivers the detachment to an own territory at arrival', async () => {
+  it('10 — REINFORCE stations the detachment in a positional garrison at arrival', async () => {
     elapseCooldown(lord.playerId)
-    // The lord owns the captured cell from test 7 (if captured) — use the
-    // capital itself as a delivery target (the simplest own holding).
+    // Use the capital itself as a delivery target (the simplest own holding).
     const created = await call<MarchView>(marchPost, lord.token, '/api/v1/marches', 'POST', {
       territoryId: capital.id,
       type: 'REINFORCE',
@@ -819,11 +818,23 @@ describe('March system (create → travel → assault → return → restore)', 
       undefined,
       marchId,
     )
-    expect(processed.body.data!.march.status).toBe('COMPLETED')
+    expect(processed.body.data!.processed).toBe(true)
+    // Phase 34: the detachment is STATIONED (ARRIVED), not restored home.
+    expect(processed.body.data!.march.status).toBe('ARRIVED')
     expect(processed.body.data!.march.outcome!.delivered).toBe(true)
-    // Delivered = restored to the realm-wide army at arrival (3 back).
+    expect(processed.body.data!.march.outcome!.garrisoned).toBe(true)
+    // The home army did NOT receive the units back (they hold the position).
     const armyAfter = await homeArmy(lord.playerId)
-    expect(armyAfter.get('swordsman')).toBe((armyBefore.get('swordsman') ?? 0) + 3)
+    expect(armyAfter.get('swordsman') ?? 0).toBe(armyBefore.get('swordsman') ?? 0)
+    // The contribution exists with exactly the committed stacks.
+    const contribution = await db.territoryGarrison.findUniqueOrThrow({
+      where: { marchId },
+      include: { territory: { select: { id: true } } },
+    })
+    expect(contribution.territoryId).toBe(capital.id)
+    expect(contribution.playerId).toBe(lord.playerId)
+    const units = contribution.units as Array<{ unitId: string; count: number }>
+    expect(units).toEqual([{ unitId: 'swordsman', count: 3 }])
   })
 
   it('11 — cancellation releases units exactly once; after arrival it refuses', async () => {
@@ -864,9 +875,11 @@ describe('March system (create → travel → assault → return → restore)', 
     const armyFinal = await homeArmy(lord.playerId)
     expect(armyFinal.get('swordsman')).toBe(armyAfter.get('swordsman'))
 
-    // Cancel AFTER arrival (the reinforce march from test 10 is COMPLETED)
+    // Cancel AFTER arrival — the reinforce march from test 10 is STATIONED
+    // (ARRIVED in a positional garrison): recall-by-cancel is refused there
+    // too; a stationed detachment leaves only through the withdrawal flow.
     const doneMarch = await db.march.findFirstOrThrow({
-      where: { playerId: lord.playerId, status: 'COMPLETED' },
+      where: { playerId: lord.playerId, status: 'ARRIVED' },
     })
     const late = await call<{ error: { code: string } }>(
       cancelPost,

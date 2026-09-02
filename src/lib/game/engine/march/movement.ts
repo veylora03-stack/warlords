@@ -163,13 +163,21 @@ export function readStoredStacks(raw: unknown): MarchStack[] {
  *   RESOLVING → LOST        (every committed unit died at the destination)
  *   RETURNING → RESOLVING   (homecoming processing claim)
  *
- * Terminals: COMPLETED | CANCELLED | LOST (and the reserved ARRIVED).
+ * Phase 34 — ARRIVED is LIVE: a delivered DEFEND/REINFORCE detachment rests
+ * in a positional TerritoryGarrison while its march row parks on ARRIVED.
+ *
+ *   ARRIVED   → RETURNING   (withdrawal claim — exactly-once arbiter; the
+ *                             existing homecoming processor restores units)
+ *   ARRIVED   → LOST        (battle settlement wiped the garrison, or the
+ *                             territory was captured — garrison routed)
+ *
+ * Terminals: COMPLETED | CANCELLED | LOST.
  */
 export const MARCH_TRANSITIONS: Readonly<Record<MarchStatus, readonly MarchStatus[]>> = {
   EN_ROUTE: ['RESOLVING', 'CANCELLED'],
   RESOLVING: ['RETURNING', 'COMPLETED', 'LOST'],
   RETURNING: ['RESOLVING'],
-  ARRIVED: [], // reserved — never persisted by this engine
+  ARRIVED: ['RETURNING', 'LOST'],
   COMPLETED: [],
   CANCELLED: [],
   LOST: [],
@@ -181,15 +189,23 @@ export function isMarchTransition(from: MarchStatus, to: MarchStatus): boolean {
 
 /** Terminal states — no further writes ever happen to these rows. */
 export function isTerminalMarchStatus(status: MarchStatus): boolean {
-  return MARCH_TRANSITIONS[status].length === 0 && status !== 'ARRIVED'
+  return MARCH_TRANSITIONS[status].length === 0
 }
 
-/** Statuses that count against the player's march-slot capacity. */
+/** Statuses that count against the player's march-slot capacity — army
+ *  MOVEMENT is what a castle commands. A stationed (ARRIVED) detachment is
+ *  stationary: it consumes no march slot, being bounded instead by territory
+ *  garrison capacity and the per-territory contribution cap (Phase 34). */
 export const ACTIVE_MARCH_STATUSES: readonly MarchStatus[] = ['EN_ROUTE', 'RESOLVING', 'RETURNING']
 
 /** Whether the march can be recalled right now (CANCEL is EN_ROUTE-only). */
 export function isCancellable(status: MarchStatus): boolean {
   return status === 'EN_ROUTE'
+}
+
+/** Whether the march is a stationed positional detachment (withdrawable). */
+export function isWithdrawable(status: MarchStatus): boolean {
+  return status === 'ARRIVED'
 }
 
 /** March actions the CLIENT may request (RETURN is engine-internal). */

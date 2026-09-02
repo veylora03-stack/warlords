@@ -48,7 +48,13 @@ describe('notification catalog structure', () => {
     // Phase 33 adds the march-engine types (army movement lifecycle).
     expect(NOTIFICATION_TYPES).toContain('MARCH_RETURNED')
     expect(NOTIFICATION_TYPES).toContain('MARCH_CANCELLED')
-    expect(NOTIFICATION_TYPES.length).toBe(15)
+    // Phase 34 adds the clan + positional-garrison types.
+    expect(NOTIFICATION_TYPES).toContain('CLAN_JOINED')
+    expect(NOTIFICATION_TYPES).toContain('CLAN_LEADERSHIP_CHANGED')
+    expect(NOTIFICATION_TYPES).toContain('GARRISON_DEPLOYED')
+    expect(NOTIFICATION_TYPES).toContain('GARRISON_WITHDRAWN')
+    expect(NOTIFICATION_TYPES).toContain('GARRISON_DESTROYED')
+    expect(NOTIFICATION_TYPES.length).toBe(20)
   })
 
   it('gives every type a payload schema and a non-empty channel list with IN_APP mandatory', () => {

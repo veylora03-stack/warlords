@@ -48,6 +48,12 @@ import {
   casualtyRows,
   type CasualtyRow,
 } from './battle.service'
+import {
+  applyGarrisonCasualtiesInTx,
+  destroyGarrisonInTx,
+  loadGarrisonDefenseInTx,
+  type GarrisonContributionManifest,
+} from './garrison.service'
 import { simulateBattle } from '@/lib/game/engine/battle/simulator'
 import type { BattleSimulationResult } from '@/lib/game/types/battle'
 import {
@@ -853,6 +859,13 @@ export interface AssaultResolutionContext {
     playerId: string | null
     name: string | null
     wasReal: boolean
+    /**
+     * Phase 34 — positional garrison contributions defending this territory.
+     * When set, defender losses settle against these CONTRIBUTION manifests
+     * (deterministic distribution) instead of player_units. Honor/XP/season/
+     * quest/stat credit still flows to the territory owner (wasReal path).
+     */
+    garrison?: GarrisonContributionManifest[] | null
   }
   seed: number
   unguarded: boolean
@@ -971,7 +984,11 @@ export async function resolveTerritoryAssaultInTx(
   if (!ctx.attackerUnitsInTransit) {
     await applyLosses(ctx.attacker.playerId, sim.attackerLosses)
   } // March armies: losses are settled against the SURVIVORS MANIFEST by the caller.
-  if (ctx.defender.wasReal) {
+  if (ctx.defender.garrison) {
+    // Phase 34 — positional defense: defender losses settle against the REAL
+    // garrison contributions (deterministic distribution), never player_units.
+    await applyGarrisonCasualtiesInTx(tx, ctx.territory.id, sim.defenderLosses, battle.id, ctx.now)
+  } else if (ctx.defender.wasReal) {
     await applyLosses(ctx.defender.playerId!, sim.defenderLosses)
   }
   // Virtual garrison losses are intentionally NOT persisted anywhere.
@@ -1029,6 +1046,31 @@ export async function resolveTerritoryAssaultInTx(
         reason: 'CAPTURE',
       },
     })
+
+    // Phase 34 — CAPTURE ROUTING: a fallen territory cannot host foreign
+    // troops. Surviving positional defenders are ROUTED (their marches go
+    // LOST with an auditable outcome); the garrison rows are removed.
+    if (ctx.defender.garrison) {
+      const routed = await destroyGarrisonInTx(tx, ctx.territory.id, battle.id, ctx.now)
+      const routedLosses = routed.reduce((sum, row) => sum + row.unitsLost, 0)
+      if (routedLosses > 0) {
+        const garrisonTargets = new Set<string>(routed.map((row) => row.playerId))
+        if (ctx.defender.playerId) garrisonTargets.add(ctx.defender.playerId)
+        for (const targetId of garrisonTargets) {
+          await enqueueNotificationInTx(tx, {
+            playerId: targetId,
+            type: 'GARRISON_DESTROYED',
+            dedupeKey: notificationDedupeKeys.garrisonDestroyed(battle.id),
+            payload: {
+              battleId: battle.id,
+              territoryId: ctx.territory.id,
+              coord: { x: ctx.territory.x, y: ctx.territory.y },
+              unitsLost: routedLosses,
+            },
+          })
+        }
+      }
+    }
   }
 
   // ── Rewards: honor, XP, season points ──────────────────────────────────
@@ -1468,6 +1510,9 @@ export async function attackTerritory(
     let defenderPlayerId: string | null = null
     let defenderPlayerName: string | null = null
     let defenderWasReal = false
+    // Positional garrison defending this territory (Phase 34) — non-null
+    // routes defender casualties to the garrison contributions.
+    let assaultDefenderGarrison: GarrisonContributionManifest[] | null = null
 
     if (territory.ownerPlayerId !== null) {
       // Player-owned territory: the owner's REAL army defends it (armies are
@@ -1483,14 +1528,33 @@ export async function attackTerritory(
         throw new AppError('INVALID_TARGET', 'Territory owner is not attackable')
       }
       defenderPlayerName = owner.name
-      defenderSide = await loadArmySide(
-        tx,
-        owner.id,
-        owner.name,
-        terrainDefenseModifiers(territory.terrain),
-        0,
-        BATTLE.casualties.defenderHospitalBps,
-      )
+      const positional = await loadGarrisonDefenseInTx(tx, territory.id)
+      if (positional) {
+        // Phase 34 — POSITIONAL defense: the stationed garrison stands; its
+        // losses settle against the contributions (never player_units).
+        defenderSide = {
+          side: {
+            playerId: owner.id,
+            name: owner.name,
+            stacks: positional.stacks,
+            modifiers: terrainDefenseModifiers(territory.terrain),
+            wallLevel: 0,
+            hospitalBps: 0,
+          },
+          totalCount: positional.totalCount,
+          names: positional.names,
+        }
+        assaultDefenderGarrison = positional.manifests
+      } else {
+        defenderSide = await loadArmySide(
+          tx,
+          owner.id,
+          owner.name,
+          terrainDefenseModifiers(territory.terrain),
+          0,
+          BATTLE.casualties.defenderHospitalBps,
+        )
+      }
     } else {
       // Unclaimed territory: the DETERMINISTIC VIRTUAL GARRISON (documented
       // NPC defender — generated from (worldSeed, x, y), never persisted,
@@ -1590,6 +1654,7 @@ export async function attackTerritory(
         playerId: defenderPlayerId,
         name: defenderPlayerName,
         wasReal: defenderWasReal,
+        garrison: assaultDefenderGarrison,
       },
       seed,
       unguarded,

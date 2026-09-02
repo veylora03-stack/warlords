@@ -180,6 +180,48 @@ export const NOTIFICATION_PAYLOAD_SCHEMAS = {
       y: z.number().int().min(0).max(100_000),
     }),
   }),
+  // Phase 34 — clans & positional garrisons.
+  CLAN_JOINED: z.object({
+    clanId: idString,
+    clanName: shortText,
+    memberName: shortText,
+    memberCount: z.number().int().min(1).max(1_000_000),
+  }),
+  CLAN_LEADERSHIP_CHANGED: z.object({
+    clanId: idString,
+    clanName: shortText,
+    oldLeaderName: shortText,
+    newLeaderName: shortText,
+  }),
+  GARRISON_DEPLOYED: z.object({
+    marchId: idString,
+    action: z.enum(['DEFEND', 'REINFORCE']),
+    territoryId: idString,
+    coord: z.object({
+      x: z.number().int().min(0).max(100_000),
+      y: z.number().int().min(0).max(100_000),
+    }),
+    unitsDeployed: z.number().int().min(1).max(1_000_000),
+    contributorName: shortText.optional(),
+  }),
+  GARRISON_WITHDRAWN: z.object({
+    marchId: idString,
+    territoryId: idString,
+    coord: z.object({
+      x: z.number().int().min(0).max(100_000),
+      y: z.number().int().min(0).max(100_000),
+    }),
+    unitsReturning: z.number().int().min(1).max(1_000_000),
+  }),
+  GARRISON_DESTROYED: z.object({
+    battleId: idString,
+    territoryId: idString,
+    coord: z.object({
+      x: z.number().int().min(0).max(100_000),
+      y: z.number().int().min(0).max(100_000),
+    }),
+    unitsLost: z.number().int().min(1).max(1_000_000),
+  }),
 } as const satisfies Record<NotificationType, z.ZodType>
 
 export type NotificationPayloadMap = {
@@ -225,6 +267,11 @@ export const NOTIFICATION_TYPE_CHANNELS: Record<NotificationType, readonly Notif
     ANNOUNCEMENT: ['IN_APP'],
     MARCH_RETURNED: ['IN_APP'],
     MARCH_CANCELLED: ['IN_APP'],
+    CLAN_JOINED: ['IN_APP'],
+    CLAN_LEADERSHIP_CHANGED: ['IN_APP'],
+    GARRISON_DEPLOYED: ['IN_APP'],
+    GARRISON_WITHDRAWN: ['IN_APP'],
+    GARRISON_DESTROYED: ['IN_APP', 'TELEGRAM'],
   }
 
 // ── Server-side rendering (validated payload → title/body) ───────────────────
@@ -364,6 +411,42 @@ export function renderNotification<K extends NotificationType>(
         body: `Your ${p.action.toLowerCase()} march to (${p.destinationCoord.x},${p.destinationCoord.y}) was recalled — ${p.unitsReleased} units released home.`,
       }
     }
+    case 'CLAN_JOINED': {
+      const p = payload as NotificationPayloadMap['CLAN_JOINED']
+      return {
+        title: `${p.memberName} joined [${p.clanName}]`,
+        body: `The clan now musters ${p.memberCount} member${p.memberCount === 1 ? '' : 's'}.`,
+      }
+    }
+    case 'CLAN_LEADERSHIP_CHANGED': {
+      const p = payload as NotificationPayloadMap['CLAN_LEADERSHIP_CHANGED']
+      return {
+        title: `[${p.clanName}] has a new leader`,
+        body: `${p.oldLeaderName} passed the banner to ${p.newLeaderName}.`,
+      }
+    }
+    case 'GARRISON_DEPLOYED': {
+      const p = payload as NotificationPayloadMap['GARRISON_DEPLOYED']
+      const contributor = p.contributorName ? ` from ${p.contributorName}` : ''
+      return {
+        title: p.action === 'DEFEND' ? 'Garrison stationed' : 'Reinforcements arrived',
+        body: `${p.unitsDeployed} units${contributor} took up position at (${p.coord.x},${p.coord.y}).`,
+      }
+    }
+    case 'GARRISON_WITHDRAWN': {
+      const p = payload as NotificationPayloadMap['GARRISON_WITHDRAWN']
+      return {
+        title: 'Garrison withdrawn',
+        body: `${p.unitsReturning} units are marching home from (${p.coord.x},${p.coord.y}).`,
+      }
+    }
+    case 'GARRISON_DESTROYED': {
+      const p = payload as NotificationPayloadMap['GARRISON_DESTROYED']
+      return {
+        title: 'Garrison destroyed',
+        body: `The position at (${p.coord.x},${p.coord.y}) fell — ${p.unitsLost} units lost in the assault.`,
+      }
+    }
   }
 }
 
@@ -397,6 +480,13 @@ export const notificationDedupeKeys = {
   announcement: (announcementId: string) => `announcement:${announcementId}`,
   marchReturned: (marchId: string) => `march_returned:${marchId}`,
   marchCancelled: (marchId: string) => `march_cancelled:${marchId}`,
+  clanJoined: (clanId: string, playerId: string) => `clan_joined:${clanId}:${playerId}`,
+  clanLeadership: (clanId: string, newLeaderPlayerId: string) =>
+    `clan_leadership:${clanId}:${newLeaderPlayerId}`,
+  garrisonDeployed: (marchId: string, viewerPlayerId: string) =>
+    `garrison_deployed:${marchId}:${viewerPlayerId}`,
+  garrisonWithdrawn: (marchId: string) => `garrison_withdrawn:${marchId}`,
+  garrisonDestroyed: (marchId: string) => `garrison_destroyed:${marchId}`,
 } as const
 
 // ── Invariants (unit-tested) ─────────────────────────────────────────────────

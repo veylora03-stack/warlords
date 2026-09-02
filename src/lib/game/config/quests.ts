@@ -54,6 +54,8 @@ export const OBJECTIVE_TYPES = [
   // Phase 33 — march domain (activated by march.service events):
   'SCOUT_TARGET', // was reserved since Phase 2 — consumes MARCH_SCOUTED
   'MARCHES_COMPLETED', // consumes MARCH_COMPLETED
+  // Phase 34 — clan & garrison domain (activated by clan/march service events):
+  'GARRISON_DEPLOYMENTS', // consumes GARRISON_DEPLOYED (JOIN_CLAN consumes CLAN_JOINED)
 ] as const
 export type ObjectiveType = (typeof OBJECTIVE_TYPES)[number]
 
@@ -72,6 +74,7 @@ export const OBJECTIVE_PROGRESS_MODES = {
   CONTROL_TERRITORIES: 'SET',
   DEFEND_TERRITORIES: 'INCREMENT',
   MARCHES_COMPLETED: 'INCREMENT',
+  GARRISON_DEPLOYMENTS: 'INCREMENT',
 } as const satisfies Record<ObjectiveType, 'INCREMENT' | 'SET'>
 export type ObjectiveProgressMode = (typeof OBJECTIVE_PROGRESS_MODES)[ObjectiveType]
 
@@ -328,6 +331,36 @@ export const QUESTS: QuestCatalogEntry[] = [
     repeatable: true,
     cooldownHours: 0,
     sortOrder: 240,
+  },
+  // ── Phase 34 — clan & garrison domain (real clan/march-engine events) ────
+  {
+    id: 'main-07-raise-banner',
+    type: 'MAIN',
+    title: 'Raise the Banner',
+    description: 'Join a clan. No warlord stands alone against the realm.',
+    objectiveType: 'JOIN_CLAN',
+    objectiveTarget: { amount: 1 },
+    reward: { GOLD: 250, XP: 120, HONOR: 15 },
+    prerequisiteQuestIds: ['main-06-first-territory'],
+    minLevel: 0,
+    repeatable: false,
+    cooldownHours: 0,
+    sortOrder: 70,
+  },
+  {
+    id: 'weekly-garrison-duty',
+    type: 'WEEKLY',
+    title: 'Garrison Duty',
+    description:
+      'Deploy 3 positional garrisons this week. Walls are only as strong as the men behind them.',
+    objectiveType: 'GARRISON_DEPLOYMENTS',
+    objectiveTarget: { amount: 3 },
+    reward: { GOLD: 350, GEMS: 10, XP: 130 },
+    prerequisiteQuestIds: [],
+    minLevel: 0,
+    repeatable: true,
+    cooldownHours: 0,
+    sortOrder: 250,
   },
 
   // ── SEASONAL (reset at season settlement; rewards expire with the season) ─

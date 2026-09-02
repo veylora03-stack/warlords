@@ -189,6 +189,12 @@ export const NOTIFICATION_TYPES = [
   'ANNOUNCEMENT', // admin broadcast fan-out (Phase 21 — engine-delivered since Phase 22)
   'MARCH_RETURNED', // Phase 33 — expedition survivors came home (units restored)
   'MARCH_CANCELLED', // Phase 33 — expedition recalled while traveling (units released)
+  // Phase 34 — clans & positional garrisons.
+  'CLAN_JOINED', // a player joined a clan (leader-facing + invitee confirmation)
+  'CLAN_LEADERSHIP_CHANGED', // leadership transferred (fan-out to members)
+  'GARRISON_DEPLOYED', // DEFEND/REINFORCE detachment reached a territory
+  'GARRISON_WITHDRAWN', // positional detachment recalled home
+  'GARRISON_DESTROYED', // territory fell and its garrison was routed
 ] as const
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
 

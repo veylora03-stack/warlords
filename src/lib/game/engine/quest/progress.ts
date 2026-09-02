@@ -49,6 +49,19 @@ export type QuestEvent =
       action: 'ATTACK' | 'DEFEND' | 'SCOUT' | 'REINFORCE'
     }
   | { kind: 'MARCH_SCOUTED'; marchId: string; territoryId: string }
+  // Phase 34 — clan & garrison domain events (raised by clan.service /
+  // march.service INSIDE the transaction that mutated that state; never
+  // client-constructible):
+  | { kind: 'CLAN_CREATED'; clanId: string; clanName: string }
+  | { kind: 'CLAN_JOINED'; clanId: string; clanName: string }
+  | {
+      /** Fires ONCE per deploying march, at the arrival tx that created the
+       *  positional contribution. */
+      kind: 'GARRISON_DEPLOYED'
+      marchId: string
+      territoryId: string
+      action: 'DEFEND' | 'REINFORCE'
+    }
 
 export type QuestEventKind = QuestEvent['kind']
 
@@ -82,6 +95,16 @@ export function questEventKey(event: QuestEvent): string {
     case 'MARCH_SCOUTED':
       // A scout march writes exactly one report — same march-id identity.
       return `MARCH_SCOUTED:march:${event.marchId}`
+    case 'CLAN_CREATED':
+      // A player creates at most one clan — the clan id is the identity.
+      return `CLAN_CREATED:clan:${event.clanId}`
+    case 'CLAN_JOINED':
+      // ClanMembership.playerId is unique (≤1 clan per player) — the pair
+      // can never fire twice, but the key keeps replays honest anyway.
+      return `CLAN_JOINED:clan:${event.clanId}`
+    case 'GARRISON_DEPLOYED':
+      // One contribution per march — the march id is the event identity.
+      return `GARRISON_DEPLOYED:march:${event.marchId}`
   }
 }
 
@@ -147,7 +170,13 @@ export function matchesObjective(
     case 'SCOUT_TARGET':
       // Activated in Phase 33 — consumes real march-engine scout events.
       return event.kind === 'MARCH_SCOUTED'
-    // Reserved extension points (Clan): no events exist yet, so
+    case 'JOIN_CLAN':
+      // Activated in Phase 34 — consumes real clan-service join events.
+      return event.kind === 'CLAN_JOINED'
+    case 'GARRISON_DEPLOYMENTS':
+      // Activated in Phase 34 — consumes real positional-garrison arrivals.
+      return event.kind === 'GARRISON_DEPLOYED'
+    // Remaining reserved extension points: no events exist yet, so
     // nothing can ever match — quests using them stay inert.
     default:
       return false
@@ -186,6 +215,12 @@ export function eventContribution(
     case 'MARCH_COMPLETED':
       return { mode, delta: 1 }
     case 'MARCH_SCOUTED':
+      return { mode, delta: 1 }
+    case 'CLAN_CREATED':
+      return { mode, delta: 1 }
+    case 'CLAN_JOINED':
+      return { mode, delta: 1 }
+    case 'GARRISON_DEPLOYED':
       return { mode, delta: 1 }
     case 'RESOURCES_EARNED':
     case 'RESOURCES_SPENT': {
