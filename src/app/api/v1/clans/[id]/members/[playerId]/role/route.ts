@@ -30,12 +30,7 @@ export const POST = defineRoute(
       rateLimit: 'playerWrite',
     })
 
-    const result = await setMemberRole(
-      principal.player.id,
-      params.id,
-      params.playerId,
-      body.role,
-    )
+    const result = await setMemberRole(principal.player.id, params.id, params.playerId, body.role)
 
     const headers: Record<string, string> = {}
     if (refreshed) {

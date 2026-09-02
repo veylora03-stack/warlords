@@ -48,9 +48,7 @@ const CLAN_TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const
 
 function runClanTransaction<T>(run: (tx: Tx) => Promise<T>): Promise<T> {
   return withKeyLock(CLAN_ENGINE_LOCK, () =>
-    withKeyLock('db:write', () =>
-      withWriteRetry(() => dbWrite.$transaction(run, CLAN_TX_OPTIONS)),
-    ),
+    withKeyLock('db:write', () => withWriteRetry(() => dbWrite.$transaction(run, CLAN_TX_OPTIONS))),
   )
 }
 
@@ -108,10 +106,7 @@ export interface ClanListPage {
 export function joinPolicyOf(settings: unknown): ClanJoinPolicy {
   if (settings !== null && typeof settings === 'object' && !Array.isArray(settings)) {
     const policy = (settings as { joinPolicy?: unknown }).joinPolicy
-    if (
-      typeof policy === 'string' &&
-      (CLAN.joinPolicies as readonly string[]).includes(policy)
-    ) {
+    if (typeof policy === 'string' && (CLAN.joinPolicies as readonly string[]).includes(policy)) {
       return policy as ClanJoinPolicy
     }
   }
@@ -211,7 +206,10 @@ export async function createClan(
   }
   let joinPolicy = CLAN.defaultJoinPolicy
   if (input.joinPolicy !== undefined) {
-    if (typeof input.joinPolicy !== 'string' || !(CLAN.joinPolicies as readonly string[]).includes(input.joinPolicy)) {
+    if (
+      typeof input.joinPolicy !== 'string' ||
+      !(CLAN.joinPolicies as readonly string[]).includes(input.joinPolicy)
+    ) {
       throw new AppError('VALIDATION_ERROR', 'joinPolicy must be OPEN or INVITE_ONLY')
     }
     joinPolicy = input.joinPolicy as ClanJoinPolicy
@@ -261,8 +259,18 @@ export async function createClan(
 
     // The founder has effectively "joined" their own banner.
     await recordPlayerStats(tx, playerId, { clansJoined: 1 })
-    await applyQuestEventInTx(tx, playerId, { kind: 'CLAN_CREATED', clanId: clan.id, clanName: clan.name }, now)
-    await applyQuestEventInTx(tx, playerId, { kind: 'CLAN_JOINED', clanId: clan.id, clanName: clan.name }, now)
+    await applyQuestEventInTx(
+      tx,
+      playerId,
+      { kind: 'CLAN_CREATED', clanId: clan.id, clanName: clan.name },
+      now,
+    )
+    await applyQuestEventInTx(
+      tx,
+      playerId,
+      { kind: 'CLAN_JOINED', clanId: clan.id, clanName: clan.name },
+      now,
+    )
     await evaluateAchievementsInTx(tx, playerId, {}, now)
 
     log.info('clan created', { clanId: clan.id, playerId, tag })
@@ -331,13 +339,23 @@ export async function joinClan(
     })
 
     await recordPlayerStats(tx, playerId, { clansJoined: 1 })
-    await applyQuestEventInTx(tx, playerId, { kind: 'CLAN_JOINED', clanId: clan.id, clanName: clan.name }, now)
+    await applyQuestEventInTx(
+      tx,
+      playerId,
+      { kind: 'CLAN_JOINED', clanId: clan.id, clanName: clan.name },
+      now,
+    )
     await evaluateAchievementsInTx(tx, playerId, {}, now)
     await enqueueNotificationInTx(tx, {
       playerId: clan.leaderPlayerId,
       type: 'CLAN_JOINED',
       dedupeKey: notificationDedupeKeys.clanJoined(clan.id, playerId),
-      payload: { clanId: clan.id, clanName: clan.name, memberName: player.name ?? 'A warlord', memberCount: clan.memberCount + 1 },
+      payload: {
+        clanId: clan.id,
+        clanName: clan.name,
+        memberName: player.name ?? 'A warlord',
+        memberCount: clan.memberCount + 1,
+      },
     })
 
     log.info('clan joined', { clanId: clan.id, playerId, policy })
@@ -352,7 +370,9 @@ export async function leaveClan(
   return runClanTransaction(async (tx) => {
     const member = await tx.clanMember.findUnique({
       where: { playerId },
-      include: { clan: { select: { id: true, name: true, leaderPlayerId: true, memberCount: true } } },
+      include: {
+        clan: { select: { id: true, name: true, leaderPlayerId: true, memberCount: true } },
+      },
     })
     if (!member) throw new AppError('NOT_IN_CLAN', 'You are not in a clan')
     if (expectedClanId !== undefined && member.clanId !== expectedClanId) {
@@ -362,10 +382,7 @@ export async function leaveClan(
     if (member.clan.leaderPlayerId === playerId) {
       // Succession rule: the leader must transfer the banner first — a clan
       // can never be left leaderless (its garrisons would lose authority).
-      throw new AppError(
-        'CLAN_LEADER_SUCCESSION',
-        'Transfer leadership before leaving your clan',
-      )
+      throw new AppError('CLAN_LEADER_SUCCESSION', 'Transfer leadership before leaving your clan')
     }
     await tx.clanMember.delete({ where: { id: member.id } })
     await tx.clan.update({
@@ -393,7 +410,8 @@ export async function inviteMember(
       where: { playerId: actorPlayerId },
       select: { role: true, clanId: true, clan: { select: { id: true, name: true, tag: true } } },
     })
-    if (!actor || actor.clanId !== clanId) throw new AppError('NOT_IN_CLAN', 'You are not in this clan')
+    if (!actor || actor.clanId !== clanId)
+      throw new AppError('NOT_IN_CLAN', 'You are not in this clan')
     if (roleRank(actor.role) < roleRank('OFFICER')) {
       throw new AppError('CLAN_ROLE_REQUIRED', 'Only the leader or an officer can invite')
     }
@@ -431,7 +449,13 @@ export async function inviteMember(
       select: { name: true },
     })
     const invitation = await tx.clanInvitation.create({
-      data: { clanId, playerId: targetPlayerId, invitedById: actorPlayerId, status: 'PENDING', expiresAt },
+      data: {
+        clanId,
+        playerId: targetPlayerId,
+        invitedById: actorPlayerId,
+        status: 'PENDING',
+        expiresAt,
+      },
     })
     await enqueueNotificationInTx(tx, {
       playerId: targetPlayerId,
@@ -445,7 +469,10 @@ export async function inviteMember(
       },
     })
     log.info('clan invite issued', { clanId, targetPlayerId, invitationId: invitation.id })
-    const clanRow = await tx.clan.findUnique({ where: { id: clanId }, select: { name: true, tag: true } })
+    const clanRow = await tx.clan.findUnique({
+      where: { id: clanId },
+      select: { name: true, tag: true },
+    })
     return {
       id: invitation.id,
       clanId,
@@ -468,7 +495,8 @@ export async function removeMember(
       where: { playerId: actorPlayerId },
       select: { role: true, clanId: true },
     })
-    if (!actor || actor.clanId !== clanId) throw new AppError('NOT_IN_CLAN', 'You are not in this clan')
+    if (!actor || actor.clanId !== clanId)
+      throw new AppError('NOT_IN_CLAN', 'You are not in this clan')
     if (roleRank(actor.role) < roleRank('OFFICER')) {
       throw new AppError('CLAN_ROLE_REQUIRED', 'Only the leader or an officer can remove members')
     }
@@ -483,7 +511,10 @@ export async function removeMember(
       throw new AppError('NOT_IN_CLAN', 'That player is not in this clan')
     }
     if (target.clan.leaderPlayerId === targetPlayerId) {
-      throw new AppError('CLAN_ROLE_REQUIRED', 'The leader cannot be removed — transfer leadership first')
+      throw new AppError(
+        'CLAN_ROLE_REQUIRED',
+        'The leader cannot be removed — transfer leadership first',
+      )
     }
     // Nobody manages an equal or higher rank.
     if (roleRank(target.role) >= roleRank(actor.role)) {
@@ -516,7 +547,8 @@ export async function setMemberRole(
       where: { playerId: actorPlayerId },
       include: { clan: { select: { id: true, leaderPlayerId: true } } },
     })
-    if (!actor || actor.clanId !== clanId) throw new AppError('NOT_IN_CLAN', 'You are not in this clan')
+    if (!actor || actor.clanId !== clanId)
+      throw new AppError('NOT_IN_CLAN', 'You are not in this clan')
     if (actor.clan.leaderPlayerId !== actorPlayerId) {
       throw new AppError('CLAN_ROLE_REQUIRED', 'Only the leader can change roles')
     }
@@ -572,21 +604,33 @@ export async function transferLeadership(
 
     // Swap: new leader becomes LEADER, old leader becomes OFFICER. Both the
     // Clan row (authority) and the role mirrors update in this one tx.
-    await tx.clanMember.update({ where: { id: target.id }, data: { role: 'LEADER', updatedAt: now } })
+    await tx.clanMember.update({
+      where: { id: target.id },
+      data: { role: 'LEADER', updatedAt: now },
+    })
     await tx.clanMember.update({
       where: { playerId: actorPlayerId },
       data: { role: 'OFFICER', updatedAt: now },
     })
-    await tx.clan.update({ where: { id: clanId }, data: { leaderPlayerId: targetPlayerId, updatedAt: now } })
+    await tx.clan.update({
+      where: { id: clanId },
+      data: { leaderPlayerId: targetPlayerId, updatedAt: now },
+    })
     await tx.player.update({ where: { id: targetPlayerId }, data: { clanRole: 'LEADER' } })
     await tx.player.update({ where: { id: actorPlayerId }, data: { clanRole: 'OFFICER' } })
 
     // Fan-out one CLAN_LEADERSHIP_CHANGED to every member (deduped).
-    const memberIds = (await tx.clanMember.findMany({ where: { clanId }, select: { playerId: true } })).map(
-      (row) => row.playerId,
-    )
-    const oldLeader = await tx.player.findUnique({ where: { id: actorPlayerId }, select: { name: true } })
-    const newLeader = await tx.player.findUnique({ where: { id: targetPlayerId }, select: { name: true } })
+    const memberIds = (
+      await tx.clanMember.findMany({ where: { clanId }, select: { playerId: true } })
+    ).map((row) => row.playerId)
+    const oldLeader = await tx.player.findUnique({
+      where: { id: actorPlayerId },
+      select: { name: true },
+    })
+    const newLeader = await tx.player.findUnique({
+      where: { id: targetPlayerId },
+      select: { name: true },
+    })
     await enqueueNotificationFanOutInTx(tx, memberIds, {
       type: 'CLAN_LEADERSHIP_CHANGED',
       dedupeKeyFor: () => notificationDedupeKeys.clanLeadership(clanId, targetPlayerId),
@@ -605,7 +649,11 @@ export async function transferLeadership(
 
 // ── Read paths ───────────────────────────────────────────────────────────────
 
-async function getClanDetailInTx(tx: Tx, clanId: string, viewerPlayerId: string | null): Promise<ClanDetailView> {
+async function getClanDetailInTx(
+  tx: Tx,
+  clanId: string,
+  viewerPlayerId: string | null,
+): Promise<ClanDetailView> {
   const clan = await tx.clan.findUnique({
     where: { id: clanId },
     include: {
@@ -626,7 +674,9 @@ async function getClanDetailInTx(tx: Tx, clanId: string, viewerPlayerId: string 
     level: member.player.level,
     joinedAt: member.joinedAt.toISOString(),
   }))
-  members.sort((a, b) => roleRank(b.role) - roleRank(a.role) || a.joinedAt.localeCompare(b.joinedAt))
+  members.sort(
+    (a, b) => roleRank(b.role) - roleRank(a.role) || a.joinedAt.localeCompare(b.joinedAt),
+  )
   const viewer = viewerPlayerId ? members.find((m) => m.playerId === viewerPlayerId) : undefined
   return {
     ...summaryView(clan),
@@ -636,7 +686,10 @@ async function getClanDetailInTx(tx: Tx, clanId: string, viewerPlayerId: string 
   }
 }
 
-export async function getClanDetail(clanId: string, viewerPlayerId: string | null): Promise<ClanDetailView> {
+export async function getClanDetail(
+  clanId: string,
+  viewerPlayerId: string | null,
+): Promise<ClanDetailView> {
   return getClanDetailInTx(dbWrite, clanId, viewerPlayerId)
 }
 
@@ -663,7 +716,9 @@ export async function listClans(options: {
   }
 }
 
-export async function listMyInvitations(playerId: string): Promise<{ invitations: ClanInvitationView[] }> {
+export async function listMyInvitations(
+  playerId: string,
+): Promise<{ invitations: ClanInvitationView[] }> {
   const now = new Date()
   const rows = await dbWrite.clanInvitation.findMany({
     where: { playerId, status: 'PENDING', expiresAt: { gt: now } },

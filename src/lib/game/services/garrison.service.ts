@@ -126,9 +126,7 @@ export function distributeGarrisonLosses(
 }
 
 /** Sums manifests across contributions (pure). */
-export function sumContributionUnits(
-  manifests: readonly MarchStack[][],
-): MarchStack[] {
+export function sumContributionUnits(manifests: readonly MarchStack[][]): MarchStack[] {
   const merged = new Map<string, number>()
   for (const stacks of manifests) {
     for (const stack of stacks) {
@@ -185,10 +183,7 @@ export interface DeployGarrisonInput {
 }
 
 /** Creates the positional contribution from the immutable march manifest. */
-export async function deployGarrisonInTx(
-  tx: Tx,
-  input: DeployGarrisonInput,
-): Promise<void> {
+export async function deployGarrisonInTx(tx: Tx, input: DeployGarrisonInput): Promise<void> {
   await tx.territoryGarrison.create({
     data: {
       territoryId: input.territoryId,

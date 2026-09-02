@@ -58,7 +58,10 @@ export function garrisonCapacity(strategicValue: number): number {
     problems.push('version must be a positive integer')
   if (!Number.isInteger(GARRISON.capacityBase) || GARRISON.capacityBase < 1)
     problems.push('capacityBase must be a positive integer')
-  if (!Number.isInteger(GARRISON.capacityPerStrategicValue) || GARRISON.capacityPerStrategicValue < 0)
+  if (
+    !Number.isInteger(GARRISON.capacityPerStrategicValue) ||
+    GARRISON.capacityPerStrategicValue < 0
+  )
     problems.push('capacityPerStrategicValue must be a non-negative integer')
   if (
     !Number.isInteger(GARRISON.maxContributionsPerTerritory) ||

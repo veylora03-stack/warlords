@@ -42,10 +42,7 @@ export const POST = defineRoute(
       march.territoryId !== params.id ||
       march.status !== 'ARRIVED'
     ) {
-      throw new AppError(
-        'MARCH_NOT_FOUND',
-        'No stationed detachment of yours on this territory',
-      )
+      throw new AppError('MARCH_NOT_FOUND', 'No stationed detachment of yours on this territory')
     }
 
     const result = await withdrawGarrison(principal.player.id, body.marchId)
