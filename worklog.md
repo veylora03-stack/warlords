@@ -345,3 +345,22 @@ Work Log:
 
 Stage Summary:
 - FINAL VERDICT: 🟢 CLANS & POSITIONAL GARRISONS PRODUCTION READY — 926/926 tests (858 Phase-33 baseline preserved + 68 new), zero engine duplication (ONE march/battle/world/clan engine), exactly-once + concurrency C1-C9 proven, battle integration real (positional garrison defends, casualties land on contributions), migrations additive on both DB twins, docs complete, UI browser-verified.
+---
+Task ID: 7
+Agent: Z.ai Code (main)
+Task: PHASE 34 — Post-reset environment reconstruction + full re-validation + deterministic test-infra fix (final verdict evidence)
+
+Work Log:
+- Sandbox had been reset again (db/ missing, .env truncated to DATABASE_URL only, dev server down). Rebuilt: .env per .env.example (sandbox-local secrets, ADMIN_TELEGRAM_IDS=9100000001, NOTIFICATION_WORKER_DISABLED=true), prisma migrate deploy (all migrations incl. 20260904000000_clans_garrisons), db:seed, prisma generate; PG twin validated with a postgres:// URL (schema valid; the SQLite-URL rejection is environmental, not schema).
+- Verified live state matches the Phase 34 claim: /api/health reports version 0.23.0-phase34, phase 34.
+- BASELINE MEASUREMENT (honest): unit 428/428 green first try; integration FAILED 2/4 full runs (garrison-system beforeAll abort + garrison-load L4 registration — both "registration failed" RATE_LIMITED); e2e 78/78 green.
+- ROOT-CAUSED (real test-infra defect, not engine): bun test runs all integration files in ONE process sharing the in-memory rate-limit store; AUTH_RATE_LIMIT is 10/60s per IP key; FOUR third-octet pools (203.0.121/134/135/136/139) were each shared by 2-3 suites → parallel registrations collided on the same auth:203.0.136.N keys → a suite's beforeAll aborted with RATE_LIMITED nondeterministically. Second defect: march-concurrency + march-security registered EVERY user from ONE fixed IP (hidden inside the old shared pools) — on a fast fresh DB the suite's own 11th registration within 60s trips the per-IP limiter.
+- FIX (test-infra only, zero engine/zero assertion change): 10 files renumbered to unique octets 141-150 (verified: every 203.0.N pool used by exactly one file); march-concurrency + march-security rotate the IP per auth-route registration (same pattern as garrison-concurrency's documented "the auth limiter is per-IP").
+- FINAL VALIDATION (all executed on HEAD+fix): unit 428/428 · integration 420/420 twice CONSECUTIVELY (pre-fix 1/4) · e2e 78/78 = 926/926 GREEN — Phase 33 baseline 858 preserved + 68 Phase 34 tests; typecheck ✓ lint ✓ prettier ✓ db:verify (ledger reconciles exactly) ✓.
+- BROWSER VERIFICATION (fresh session, dev-impersonate on the seeded admin): signed-in render; clans panel — found clan IRON live (LEADER, roster, invite, succession-guard copy); territory detail (11,18) — full Phase 34 garrison block (capacity 650 = 400 + 250×strategicValue, roster, DEPLOY DEFEND); live golden path: DEFEND deploy → EN_ROUTE countdown → ARRIVED 🛡 STATIONED (0/1 slots — stationed consumes no castle slot) → garrison 2/650 · 1 contribution LIVE; second deploy → 3/650 · 2 contributions live without reload (useProcessMarch → ['world'] invalidation verified); WITHDRAW → 1/650 · 1 contribution live; server truth cross-checked via GET /territories/[id]/garrison (garrisoned true, full contributor traceability playerId/clanId/marchId/deployedAt); ZERO console/page errors; scrollWidth==clientWidth at 390px AND 1280px (screenshots /home/z/.ztmp/p34-final-{390,1280}.png).
+- Committed test-infra fix 9ce4c2c (10 files, +17/−13). Tree clean.
+
+Stage Summary:
+- Phase 34 claims INDEPENDENTLY REPRODUCED on a reconstructed environment: 926/926, all gates green, browser-verified end-to-end.
+- The only defect found was suite-infra rate-limit allocation (deterministic after fix); ZERO engine, schema, security, or API defects surfaced.
+- FINAL VERDICT: 🟢 CLANS & POSITIONAL GARRISONS PRODUCTION READY (evidence re-executed 2026-09-02, HEAD 9ce4c2c on 1acf8cd).
