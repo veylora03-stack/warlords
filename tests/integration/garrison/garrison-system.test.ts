@@ -62,7 +62,7 @@ const TG_PREFIX = '9100059'
 let tgCounter = 9100059001
 const nextTgId = (): string => String(tgCounter++)
 let ipCounter = 1
-const nextIp = (): string => `203.0.136.${ipCounter++}`
+const nextIp = (): string => `203.0.146.${ipCounter++}` // unique per file: shared pools trip AUTH_RATE_LIMIT across parallel suites
 
 function buildInitData(telegramId: string): string {
   const fields: Record<string, string> = {

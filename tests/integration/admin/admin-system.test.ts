@@ -78,7 +78,7 @@ let tgCounter = 1
 const nextTgId = (): string => `${TG_BASE}${String(tgCounter++).padStart(3, '0')}`
 const tgIds: string[] = []
 
-const IP_BASE = '203.0.121.'
+const IP_BASE = '203.0.149.' // unique per file: shared pools trip AUTH_RATE_LIMIT across parallel suites
 let ipCounter = 1
 const nextIp = (): string => `${IP_BASE}${ipCounter++}`
 

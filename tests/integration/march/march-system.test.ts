@@ -65,7 +65,7 @@ if (!BOT_TOKEN || !JWT_SECRET) {
 }
 
 const TG_PREFIX = '9100051'
-const IP = '203.0.134.'
+const IP = '203.0.141.' // unique per file: shared pools trip AUTH_RATE_LIMIT (10/60s per IP) across parallel suites
 let ipCounter = 1
 const nextIp = (): string => `${IP}${ipCounter++}`
 

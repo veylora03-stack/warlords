@@ -29,7 +29,7 @@ import { adjacentCoords } from '../../../src/lib/game/engine/world/generator'
 import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
 
 const TG_RANGE = '9100038'
-const IP = '203.0.139.1'
+const IP = '203.0.150.1' // unique per file: shared pools trip AUTH_RATE_LIMIT across parallel suites
 
 let lordId = ''
 let targets: string[] = []

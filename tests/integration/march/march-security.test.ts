@@ -32,7 +32,9 @@ if (!BOT_TOKEN || !JWT_SECRET) {
 }
 
 const TG_PREFIX = '9100054'
-const IP = '203.0.135.1'
+const IP = '203.0.144.1' // unique per file: shared pools trip AUTH_RATE_LIMIT across parallel suites
+let regIpCounter = 1
+const nextRegIp = (): string => `203.0.144.${regIpCounter++}` // rotate per auth call — the auth limiter is per-IP (10/60s)
 
 let tgCounter = 9100054001
 const nextTgId = (): string => String(tgCounter++)
@@ -93,7 +95,7 @@ async function register(): Promise<{ token: string; playerId: string }> {
   const res = await telegramPost(
     new Request('http://localhost:3000/api/v1/auth/telegram', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': IP },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': nextRegIp() },
       body: JSON.stringify({ initData: buildInitData(tgId) }),
     }),
   )
@@ -188,7 +190,7 @@ describe('March security matrix (STEP 25)', () => {
     const res = await telegramPost(
       new Request('http://localhost:3000/api/v1/auth/telegram', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-forwarded-for': IP },
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': nextRegIp() },
         body: JSON.stringify({ initData: forgedInitData }),
       }),
     )

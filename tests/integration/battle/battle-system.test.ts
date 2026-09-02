@@ -66,7 +66,7 @@ if (!BOT_TOKEN || !JWT_SECRET) {
   )
 }
 
-const IP_BASE = '203.0.121.'
+const IP_BASE = '203.0.148.' // unique per file: shared pools trip AUTH_RATE_LIMIT across parallel suites
 let ipCounter = 1
 const nextIp = (): string => `${IP_BASE}${ipCounter++}`
 
