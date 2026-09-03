@@ -66,3 +66,6 @@ db/custom.db-wal
 # sandbox runtime artifacts (never track)
 .zscripts/
 *.pid
+
+# freebuff local project data (never track)
+.freebuff/
