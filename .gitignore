@@ -62,3 +62,7 @@ server.log
 /tool-results/
 db/custom.db-shm
 db/custom.db-wal
+
+# sandbox runtime artifacts (never track)
+.zscripts/
+*.pid

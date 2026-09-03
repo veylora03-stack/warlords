@@ -364,3 +364,30 @@ Stage Summary:
 - Phase 34 claims INDEPENDENTLY REPRODUCED on a reconstructed environment: 926/926, all gates green, browser-verified end-to-end.
 - The only defect found was suite-infra rate-limit allocation (deterministic after fix); ZERO engine, schema, security, or API defects surfaced.
 - FINAL VERDICT: 🟢 CLANS & POSITIONAL GARRISONS PRODUCTION READY (evidence re-executed 2026-09-02, HEAD 9ce4c2c on 1acf8cd).
+---
+Task ID: 8
+Agent: Z.ai Code (main)
+Task: PHASE 34.5 — Production Deployment & Launch Readiness
+
+Work Log:
+- INSPECT: real HEAD was 2f85ad6 (auto-generated UUID commit on top of my 9ce4c2c; content = my Phase-34 worklog entry + a wrongly-tracked .zscripts/dev.pid). Stack confirmed from Phase 26: multi-stage Dockerfile (standalone, non-root, HEALTHCHECK), docker/docker-entrypoint.sh (RUN_MIGRATIONS gate), docker-compose (app+PG16 parity), root DEPLOYMENT.md, prisma/postgres schema+migrations, /health + /ready probes, scripts/telegram/setup-bot.ts.
+- BASELINE: sandbox reset AGAIN (3rd time) — .env truncated + db/ missing; rebuilt env/migrations/seed. First baseline run exposed REAL defects (honest numbers): integration 409-414/420 with 6 failures. Root-caused THREE test-infra defects + ONE engine data-integrity defect:
+  (1) frontier helper: one-time lord selection went stale under parallel registration pressure (3x24 registrations exhausted); fixed with stale-lord reset + minStrategicValue option.
+  (2) post-chain registrations claimed the unclaimed frontier cells as capitals (L4's 19 mates claimed the foe's staging cell Y; C4/C5 same pattern) → honest TERRITORY_CAPITAL_PROTECTED refusals; fixed by freezing geography (capture X+Y before further registrations).
+  (3) battle-system cleanupCreated deleted users directly → Player cascade SetNull left ~55 ORPHAN CAPITALS (isCapital=true, owner=null, never purgeable, permanently occupying the spawn spiral) + 261 SV-0 degraded cells accumulated; fixed via shared resetPlayerTerritories (cleanup.ts) and purged the pattern.
+  (4) ENGINE FIX (production data integrity): world-capital.service standalone-capital create branch now inherits strategicValue+defenseStrength from the deterministic pure generator (previously schema defaults persisted forever — ensureWorldGenerated excludes occupied cells; early registrants got SV-0 capitals and degraded garrison capacity). regionId stays null for the existing backfill (FK), resourceType/productionRate match the converted-cell branch.
+- FINAL BASELINE after fixes: unit 428/428 · integration 420/420 ×3 CONSECUTIVE · e2e 78/78 = 926/926 ×3; typecheck/lint/prettier/db:verify green; PG twin schema valid (offline; docker unavailable → real-PG run documented NOT VERIFIED).
+- ENV AUDIT: .env.example complete vs env.ts Zod contract; secret scan — no real secrets tracked (2 benign fixtures: AWS-docs placeholder in a skills template, explicit fake test tokens); git history .env held only a local SQLite path (no rotation needed); .env* gitignored.
+- WORLD INIT: ensureWorldGenerated idempotent (region-count guard + db:write lock + inner re-check); db:seed upsert-based, double-run verified no duplication (1681/36/1/19 counts stable).
+- BUILD: bun run build EXECUTED — exit 0 (earlier "sandbox forbids build" notes obsolete). Startup: standalone boot verified healthy (db up, /ready 200 with config check).
+- SECURITY FINDING + FIX: next build copies the build-host .env into .next/standalone/.env (artifact secret leak on non-Docker paths) — build script now strips .env* post-copy; verified by rebuild (artifact clean). Docker path already safe (.dockerignore).
+- FAIL-SAFE GATES verified live: production boot without secrets → auth routes fail closed (500, no leak), /ready → 503 (with secrets → 200 + "required secrets present"); Secure/HttpOnly/SameSite=Lax cookies via env.isProd; CSP frame-ancestors Telegram-only + HSTS in prod; webhook secret constant-time compared (401 without); structured logger redacts sensitive keys.
+- ADVERSARIAL PROBES (live): unauth 401, malformed JSON 400, webhook-no-secret 401, SQLi/path-traversal patterns stopped at auth boundary.
+- LOAD: 160 concurrent read-probes (4 surfaces × 40) — zero failures, 7.6-15.1ms avg (dev-server numbers, documented as such); suite L1-L5 numbers already green.
+- BROWSER: re-verified signed-in render at 390px (no overflow), clans+map+garrison surfaces, ZERO console/page errors.
+- DEPS: next 16.3.3/react 19.2.3/prisma 6.19.2/zod 4.3.5 — semver-compatible updates only; majors (prisma 7/8, react-day-picker 10) deferred per no-blind-upgrade rule.
+- DEPLOYMENT CONFIG: docs/PRODUCTION-DEPLOYMENT.md written (verification snapshot, launch checklist, DB procedures, security findings incl. X-Forwarded-For trust gap, backup/monitoring NOT-CONFIGURED status, troubleshooting); .zscripts/dev.pid untracked + gitignored (prevents UUID-commit recurrence).
+- TELEGRAM WEBHOOK E2E: NOT VERIFIED — EXTERNAL CREDENTIAL REQUIRED (honest; pipeline is test-covered with fixture tokens only).
+
+Stage Summary:
+- FINAL VERDICT: 🟢 APPLICATION LAUNCH READY — production build/startup/gates verified by execution; 926/926 ×3; no critical exploit; docs complete. INFRASTRUCTURE NOT CONFIGURED (honestly): real-PG migration run, live webhook round-trip, monitoring, backups, prod load test, trusted-proxy IP config — all listed as operator requirements in docs/PRODUCTION-DEPLOYMENT.md §11.
