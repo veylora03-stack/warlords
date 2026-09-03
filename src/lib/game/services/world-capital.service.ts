@@ -17,6 +17,7 @@
 import type { Tx } from './player-bootstrap.service'
 import { AppError } from '@/lib/api/errors'
 import { WORLD } from '@/lib/game/config/world'
+import { generateWorld } from '@/lib/game/engine/world/generator'
 import { resolveSeasonStateInTx } from './season-state.service'
 
 export interface CapitalClaimResult {
@@ -98,8 +99,16 @@ export async function claimCapitalTerritory(
   }
 
   // No generated cell at this coordinate (world not generated yet, or a
-  // pre-world legacy city). Create the capital standalone; the region link
-  // is backfilled by ensureWorldGenerated when the grid materializes.
+  // pre-world legacy city). Create the capital standalone — Phase 34.5
+  // production data-integrity fix: the cell's STATIC fields (strategicValue,
+  // defenseStrength, regionId) come from the DETERMINISTIC pure generator so
+  // a capital claimed before the grid materializes carries exactly the
+  // values the world would have assigned it. Previously these rows kept
+  // schema defaults (strategicValue 0, regionId null FOREVER — the batch
+  // insert of ensureWorldGenerated excludes occupied cells), which degraded
+  // garrison capacity and region stats for early registrants and poisoned
+  // the test sandbox's world geometry.
+  const generatedCell = generateWorld().territories.find((c) => c.x === input.x && c.y === input.y)
   const created = await tx.territory.create({
     data: {
       x: input.x,
@@ -113,6 +122,18 @@ export async function claimCapitalTerritory(
       cityId: input.cityId,
       isCapital: true,
       lastCapturedAt: now,
+      // Capitals do not produce (matching the converted-cell branch); only
+      // the static combat identity is inherited from the generator. regionId
+      // stays null — the Region rows do not exist yet (FK); the
+      // ensureWorldGenerated backfill links it when the grid materializes.
+      resourceType: null,
+      productionRate: 0,
+      ...(generatedCell
+        ? {
+            strategicValue: generatedCell.strategicValue,
+            defenseStrength: generatedCell.defenseStrength,
+          }
+        : {}),
     },
     select: { id: true },
   })

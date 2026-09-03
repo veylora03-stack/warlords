@@ -243,8 +243,48 @@ describe('March security matrix (STEP 25)', () => {
     expect(army.count).toBe(70) // bootstrap 20 + grant 50 — untouched by every refusal
   })
 
+  /**
+   * The shared world is LIVE — a parallel suite can capture the picked
+   * frontier target mid-run (the engine honestly refuses stale targets).
+   * Re-validate before each creation-sensitive test; if the free-slot
+   * player went landlocked, register a fresh edge player with an army.
+   */
+  async function refreshTarget(): Promise<void> {
+    // A picked target can go stale (a parallel suite captured it, or it
+    // became someone's capital) — ALWAYS re-validate from the live DB.
+    adjacentTarget = null
+    for (let attempt = 0; attempt < 4 && !adjacentTarget; attempt++) {
+      if (freeSlotPlayer) {
+        const capital = await db.territory
+          .findFirstOrThrow({
+            where: { ownerPlayerId: freeSlotPlayer.playerId, isCapital: true },
+            select: { x: true, y: true },
+          })
+          .catch(() => null)
+        if (capital) {
+          adjacentTarget = await db.territory.findFirst({
+            where: {
+              OR: adjacentCoords(capital.x, capital.y).map((c) => ({ x: c.x, y: c.y })),
+              status: 'UNCLAIMED',
+              isCapital: false,
+            },
+            select: { id: true },
+          })
+        }
+      }
+      if (!adjacentTarget) {
+        const candidate = await register()
+        players.push(candidate)
+        freeSlotPlayer = candidate
+        await grantArmy(candidate.playerId)
+      }
+    }
+    if (!adjacentTarget) throw new Error('no frontier cell for the security fixtures')
+  }
+
   it('SEC4 — fake timestamps: client-claimed arrivals never become server truth', async () => {
     if (!adjacentTarget) return
+    await refreshTarget()
     const created = await call<{ id: string; arrivesAt: string; serverNowMs: number }>(
       marchPost,
       freeSlotPlayer.token,
@@ -274,6 +314,7 @@ describe('March security matrix (STEP 25)', () => {
 
   it('SEC5 — cross-player march access: read/cancel/process are owner-only', async () => {
     if (!adjacentTarget) return
+    await refreshTarget()
     // Free the single starter slot: recall any march SEC4 left behind.
     const live = await db.march.findFirst({
       where: { playerId: freeSlotPlayer.playerId, status: 'EN_ROUTE' },

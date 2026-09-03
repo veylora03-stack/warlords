@@ -53,7 +53,7 @@ import { runEconomyTransaction } from '../../../src/lib/game/services/economy.se
 import { BATTLE } from '../../../src/lib/game/config/battle'
 import { STARTER_WALLET } from '../../../src/lib/game/config/starter'
 import type { ApiEnvelope } from '../../../src/types/api'
-import { purgeTestUsersByTelegramPrefix } from '../../helpers/cleanup'
+import { purgeTestUsersByTelegramPrefix, resetPlayerTerritories } from '../../helpers/cleanup'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -271,6 +271,14 @@ async function cleanupCreated(): Promise<void> {
     where: { id: { in: [...createdIds] } },
     select: { id: true, userId: true },
   })
+  // Deleting a Player cascades Territory.ownerPlayerId to NULL (SetNull)
+  // WITHOUT clearing isCapital — that would orphan every capital (they then
+  // occupy the spawn spiral FOREVER and no purge can ever reset them).
+  // Reset the holdings FIRST, then the user delete is cascade-safe.
+  await resetPlayerTerritories(
+    db,
+    players.map((p) => p.id),
+  )
   for (const player of players) {
     await db.user.delete({ where: { id: player.userId } }).catch(() => undefined)
   }

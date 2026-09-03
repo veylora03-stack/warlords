@@ -400,16 +400,19 @@ describe('Garrison & clan concurrency (STEP 16 races)', () => {
 
   it('C4 — battle × reinforcement arrival: serialized outcomes, no lost contributions', async () => {
     const { lord, foe, cell, foeCell } = await registerSharedFrontierRetry()
+    // Freeze the geography FIRST: every later registration claims the next
+    // free spiral cell as a capital — an unclaimed X/Y left behind could be
+    // claimed mid-test (the capture would then honestly refuse a capital).
+    await grantArmy(lord.playerId, 300)
+    await grantArmy(foe.playerId, 800)
+    await captureCell(lord.playerId, cell.id)
+    await captureCell(foe.playerId, foeCell.id) // expand next door to X
     const mate = await register()
     const clan = await createClan(lord.playerId, { name: 'Conc Hold Four', tag: 'CC4' })
     clanIds.push(clan.id)
     await joinClan(mate.playerId, clan.id)
-    await grantArmy(lord.playerId, 300)
     await grantArmy(mate.playerId, 60)
-    await grantArmy(foe.playerId, 800)
     await raiseCastle(mate.playerId, 41)
-    await captureCell(lord.playerId, cell.id)
-    await captureCell(foe.playerId, foeCell.id) // expand next door to X
     await prepareAssault(foe.playerId)
 
     const reinforce = await createMarch(mate.playerId, {
@@ -453,16 +456,18 @@ describe('Garrison & clan concurrency (STEP 16 races)', () => {
 
   it('C5 — multi-contributor battle wipe racing withdrawals: destroyed + surviving + restored == committed', async () => {
     const { lord, foe, cell, foeCell } = await registerSharedFrontierRetry()
+    // Freeze the geography FIRST (see C4) — capture X and Y before any
+    // further registration can claim them as a capital.
+    await grantArmy(lord.playerId, 300)
+    await grantArmy(foe.playerId, 900)
+    await captureCell(lord.playerId, cell.id)
+    await captureCell(foe.playerId, foeCell.id) // expand next door to X
     const mate = await register()
     const clan = await createClan(lord.playerId, { name: 'Conc Hold Five', tag: 'CC5' })
     clanIds.push(clan.id)
     await joinClan(mate.playerId, clan.id)
-    await grantArmy(lord.playerId, 300)
     await grantArmy(mate.playerId, 300)
-    await grantArmy(foe.playerId, 900)
     await raiseCastle(mate.playerId, 41)
-    await captureCell(lord.playerId, cell.id)
-    await captureCell(foe.playerId, foeCell.id) // expand next door to X
     await prepareAssault(foe.playerId)
 
     const lordMarch = await station(lord.playerId, cell.id, 10)

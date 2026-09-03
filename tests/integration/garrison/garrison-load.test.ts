@@ -235,9 +235,15 @@ describe('Garrison & clan load (STEP 25 measurements)', () => {
     // Honest geography: the stacked cell is a CAPTURED frontier cell (never
     // a capital — capitals are unassailable), found via the shared two-step
     // frontier helper.
-    const { lord, foe, cell, foeCell } = await findTwoStepFrontier(register)
-    const clan = await createClan(lord.playerId, { name: 'Load Stack', tag: 'LSTK' })
-    clanIds.push(clan.id)
+    const { lord, foe, cell, foeCell } = await findTwoStepFrontier(register, 3, {
+      minStrategicValue: 3, // the stacking math below assumes capacity = base + perSV*3
+    })
+    // Freeze the geography BEFORE the clanmate registrations: the spawn
+    // spiral claims the next free cells as each new player's capital, so an
+    // unclaimed frontier cell left behind would be claimed as a mate's
+    // capital mid-test (the foe's staging cell became a capital that way —
+    // his capture then honestly refused it). Capture BOTH cells now; owned
+    // cells are excluded from the city-site search.
     await grantArmy(lord.playerId, 400)
     await grantArmy(foe.playerId, 2_000)
     await prepareBattle(lord.playerId)
@@ -256,6 +262,10 @@ describe('Garrison & clan load (STEP 25 measurements)', () => {
       data: { returnsAt: new Date(Date.now() - 1000) },
     })
     await runMarchHomecoming(capture.id)
+    await captureCellFor(foe.playerId, foeCell.id)
+
+    const clan = await createClan(lord.playerId, { name: 'Load Stack', tag: 'LSTK' })
+    clanIds.push(clan.id)
 
     // The lord's own contribution (the 20th — the ceiling). His capture
     // battle restarted the regroup clock — elapse it again first.
@@ -308,8 +318,9 @@ describe('Garrison & clan load (STEP 25 measurements)', () => {
     expect(view.totalUnits).toBeLessThanOrEqual(capacity)
     expect(viewMs).toBeLessThan(1_000)
 
-    // One full assault against the stacked 600-unit garrison.
-    await captureCellFor(foe.playerId, foeCell.id)
+    // One full assault against the stacked 600-unit garrison — the foe
+    // already holds the adjacent staging cell (captured above, before the
+    // geography froze).
     await prepareBattle(foe.playerId)
     const assaultStart = performance.now()
     const assault = await attackTerritory(foe.playerId, {

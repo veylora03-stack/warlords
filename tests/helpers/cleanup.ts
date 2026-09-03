@@ -26,6 +26,32 @@
 
 import type { PrismaClient } from '@prisma/client'
 
+/**
+ * Resets every territory owned by the given players to an inert unclaimed
+ * cell (capital flag included). Exported for suites that delete players
+ * through a custom path — deleting a Player cascades
+ * `Territory.ownerPlayerId` to NULL via SetNull WITHOUT clearing
+ * `isCapital`, which leaves ORPHAN CAPITALS that permanently occupy the
+ * spawn spiral and can never be claimed or purged again.
+ */
+export async function resetPlayerTerritories(db: PrismaClient, playerIds: string[]): Promise<void> {
+  if (playerIds.length === 0) return
+  await db.territory.updateMany({
+    where: { ownerPlayerId: { in: playerIds } },
+    data: {
+      ownerPlayerId: null,
+      ownerType: 'NONE',
+      status: 'UNCLAIMED',
+      isCapital: false,
+      type: 'NPC_VILLAGE',
+      terrain: 'PLAINS',
+      name: null,
+      lastCapturedAt: null,
+      productionCollectedAt: null,
+    },
+  })
+}
+
 export async function purgeTestUsersByTelegramPrefix(
   db: PrismaClient,
   prefix: string,
@@ -41,20 +67,7 @@ export async function purgeTestUsersByTelegramPrefix(
   // 1) Reset every owned territory so the world grid stays claimable and
   //    structurally consistent after the owners disappear.
   if (playerIds.length > 0) {
-    await db.territory.updateMany({
-      where: { ownerPlayerId: { in: playerIds } },
-      data: {
-        ownerPlayerId: null,
-        ownerType: 'NONE',
-        status: 'UNCLAIMED',
-        isCapital: false,
-        type: 'NPC_VILLAGE',
-        terrain: 'PLAINS',
-        name: null,
-        lastCapturedAt: null,
-        productionCollectedAt: null,
-      },
-    })
+    await resetPlayerTerritories(db, playerIds)
     // 1b) Phase 33: marches reference battles (SetNull) and territories
     //     (SetNull) — clear them before the battle/user rows go away.
     await db.march.deleteMany({ where: { playerId: { in: playerIds } } })
