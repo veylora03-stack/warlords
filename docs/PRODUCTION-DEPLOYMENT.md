@@ -209,3 +209,74 @@ security posture · test baseline · documentation.
 Open (own them before public launch): real-PG migration run, live webhook
 round-trip, monitoring wiring, backup configuration + restore drill,
 production load test, trusted-proxy IP configuration.
+
+---
+
+# Phase 34.6 — Production verification addendum (evidence-based)
+
+Executed against the REAL production deployment in this sandbox: standalone
+WARLORDS server (`127.0.0.1:3000`, loopback-only) behind Caddy `:81`, backed
+by a real PostgreSQL 16.15 instance (`127.0.0.1:5432`, scram-sha-256,
+WAL-archiving on). Every claim below cites an executed command; raw evidence
+lives in `/home/z/warlords-ops/evidence/` (outside the repository).
+
+## 0.1 Status snapshot (Phase 34.6)
+
+| # | Area | Status | Evidence |
+|---|---|---|---|
+| 1 | Trusted proxy / bind scope | **VERIFIED LIVE** | `ss` shows `127.0.0.1:3000` only; TCP connect to the external interface refused (loopback control accepted); 12 forged `X-Forwarded-For` values via `:81` all collapsed onto ONE rate-limit key → 401×10 then **429 at #11**; contrast path (direct `:3000` with forged XFF) rotates keys but is host-local-only by the bind restriction |
+| 2 | Rate limiting | **VERIFIED LIVE** | IP-keyed auth limiter: 429 body `{code:"RATE_LIMITED", details:{retryAfterSec,limit:10,windowSec:60}}` + recovery 401 after the 60s window; principal-keyed `standard` group (300/min): first 429 at hit #301, recovery 200 after window; webhook intentionally has NO IP limiter (constant-time secret gate = 401s, documented design) |
+| 3 | Concurrency (march/garrison/territory) | **VERIFIED LIVE** (single-player races) + suite coverage for cross-actor races | 8 concurrent march creations → exactly 1 success + 7×409 `MARCH_SLOTS_EXHAUSTED`, stock deducted exactly once (20→15); 8 concurrent same-idempotency-key creations → **1 march row, 1 unit deducted, 1 key claim, all responses carry the same march**; 6 concurrent arrival processors → **exactly 1 battle row**, no double homecoming credit; 3 concurrent garrison withdrawals → 1×200 + 2×409 `MARCH_NOT_WITHDRAWABLE`, garrison clean 0, no negatives; SQL sweep: 0 negative stocks/energy/garrisons, 0 orphan territories, 0 duplicate idempotency claims, max 1 battle per march |
+| 4 | World initialization idempotency | **VERIFIED LIVE** | Production grid lazily generated on first world read: 3 → **1681 territories / 36 regions / 1 season**; runs #2/#3 identical counts; 0 duplicate (x,y), 0 orphan capitals, 0 invalid owner refs, all 3 pre-existing standalone capitals intact + region-backfilled |
+| 5 | Golden-path smoke (16 checks) | **VERIFIED LIVE** | health(200, v0.23.0-phase34) · ready(200) · real-HMAC auth(200 + HttpOnly/Secure/SameSite=Lax) · auth/me(SUPERADMIN principal) · player/state · army roster · world map · player-territories · territory detail · march create · **battle resolved exactly once (`ATTACKER_WIN`, `captured:true`, ownership flipped)** · battle detail · garrison deploy+view (3/900, contributor visible) · clan create+list · notifications(unread=13). Typed 409s observed where game rules apply (march slots, collect cooldown) — correct engine behavior |
+| 6 | Performance (concurrent reads) | **VERIFIED LIVE** (sandbox scale) | 50 concurrent across map/territory/state/clans/garrison: avg 112.9ms · p50 111.9 · p95 180.3 · max 196.7 · **0% errors**, wall 560ms; 100 concurrent: avg 398.4ms · p50 374.0 · p95 748.1 · max 841.0 · **0% errors**, wall 1291ms; server RSS 259→289MB (stable), PG RSS 29MB (flat) |
+| 7 | Backups | **VERIFIED LIVE** | `backup-postgres.sh` executed: `pg_dump -Fc` 200,644 B, sha256 sidecar, 350 TOC entries; `pg_basebackup` physical base taken (manifest present; required a one-time `ALTER ROLE warlords REPLICATION`); WAL archiving ON (`archive_mode=on`, segments accumulating); retention ≥14 days enforced by the script |
+| 7b | Restore drill | **VERIFIED LIVE** | `restore-drill.sh`: fresh dump → `initdb` temp instance on `127.0.0.1:5433` → `pg_restore` → **15/15 checks PASS** (58 tables, all row counts == production, 0 FK violations, 0 unvalidated constraints, 0 dup x,y, ledger present) → teardown. One benign version-skew note: pg_dump v17 emits `SET transaction_timeout` (PG17-only) which the PG16 target ignores — no data impact |
+| 8 | Watchdog | **VERIFIED LIVE** (script) / scheduling **CONFIGURED (script ready) — operator must wire the scheduler** | `watchdog.sh`: pg · server process · /api/health · /ready · disk · memory · restart-loop (10-min window) — all OK, exit 0; PG-down self-heal path exercised. Schedule with `*/5 * * * * /home/z/warlords-ops/watchdog.sh` on the host |
+| 9 | Secret redaction | **VERIFIED LIVE** | Scanned 8 log files (app, PG, watchdog, backup, drill, host-capture) × 7 secret patterns (bot token, JWT, webhook, admin, DB password, initData hash, session JWT): **all hits=0**; `.next/standalone` contains no `.env*`; zero secret matches in artifact files and git-tracked files |
+
+## 0.2 Honest non-verifiables (unchanged boundaries)
+
+- **Telegram inbound webhook round-trip: NOT VERIFIED** — this sandbox's
+  ingress is not publicly reachable by Telegram servers, so Telegram cannot
+  deliver updates. Outbound Bot API is live (getMe / setMyCommands verified);
+  the webhook endpoint is secret-gated and verified locally (401 without /
+  with wrong secret, 200 + processed with the real secret), but the real
+  inbound delivery can only be verified on a public host.
+- **Mini App inside Telegram: NOT VERIFIED** — same public-HTTPS boundary.
+- **PRODUCTION URL: NOT AVAILABLE — sandbox ingress is not publicly reachable
+  by Telegram.** When a real public domain exists: set `APP_URL=https://<domain>`
+  in the deployment env, run `bun run telegram:setup`, then verify webhook
+  delivery and the Mini App end-to-end.
+- **Bot token rotation REQUIRED after public deployment**: the token used
+  during this deployment session was exposed in chat history. After launch:
+  BotFather → `/revoke` → update `TELEGRAM_BOT_TOKEN` in the deployment env
+  → restart → re-verify getMe / auth / webhook / Mini App.
+
+## 0.3 Operator schedule wiring (host crontab)
+
+```
+# daily logical dump (retention 14d) — 03:15 server time
+15 3 * * * /home/z/warlords-ops/backup-postgres.sh >> /home/z/pgbackups/backup-cron.log 2>&1
+# weekly physical base backup (PITR anchor) — Sunday 04:15
+15 4 * * 0 /home/z/warlords-ops/backup-postgres.sh --base >> /home/z/pgbackups/backup-cron.log 2>&1
+# health watchdog — every 5 minutes
+*/5 * * * * /home/z/warlords-ops/watchdog.sh
+```
+
+Credentials live in `/home/z/warlords-ops/pg-credentials` (chmod 600) and
+the deployment env in `/home/z/warlords-ops/warlords-prod.env` (chmod 600);
+neither is inside the repository.
+
+## 0.4 Incidents encountered & fixed during verification
+
+- **Duplicate supervisor crash-loop**: starting `bun run dev` twice produced
+  a second supervisor whose server child died with EADDRINUSE every ~2s
+  (~38 min of log noise before detection). Fixed by killing the duplicate
+  and adding a flock single-instance guard to
+  `scripts/ops/production-supervisor.sh` (a second starter now exits
+  cleanly). The watchdog restart-loop detector now counts only restarts
+  within the last 10 minutes by timestamp.
+- **REPLICATION privilege**: `pg_basebackup` initially failed (`only roles
+  with the REPLICATION attribute may start a WAL sender`); granted to the
+  backup role via a temporary peer-auth rule + reload (rule removed after).

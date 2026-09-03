@@ -391,3 +391,28 @@ Work Log:
 
 Stage Summary:
 - FINAL VERDICT: 🟢 APPLICATION LAUNCH READY — production build/startup/gates verified by execution; 926/926 ×3; no critical exploit; docs complete. INFRASTRUCTURE NOT CONFIGURED (honestly): real-PG migration run, live webhook round-trip, monitoring, backups, prod load test, trusted-proxy IP config — all listed as operator requirements in docs/PRODUCTION-DEPLOYMENT.md §11.
+
+---
+Task ID: 9
+Agent: Z.ai Code (main)
+Task: PHASE 34.6 — Production deployment verification completion (12-item battery on the live production stack)
+
+Work Log:
+- Resumed after interruption; confirmed stack state (PG 16.15 up, supervisor up, standalone server on 127.0.0.1:3000, HEAD 724e2e4 + ops commit 437f723 = supervisor + package.json dev).
+- INCIDENT: duplicate `bun run dev` produced a second supervisor crash-looping on EADDRINUSE (~38min, log noise in dev.log). Killed the duplicate; root-caused the `tee dev.log` fan-in; added flock single-instance guard to scripts/ops/production-supervisor.sh (second starter exits cleanly).
+- ITEM 1 trusted-proxy VERIFIED LIVE: bind 127.0.0.1:3000 only; external-interface connect refused (loopback control accepted); 12 forged X-Forwarded-For values via the :81 gateway → 401×10 + 429 at #11 (single shared limiter key; the gateway replaces XFF, app takes last entry); recovery 401 after window.
+- ITEM 2 rate-limit VERIFIED LIVE: 429 shape {RATE_LIMITED, retryAfterSec, limit, windowSec} + headers; principal `standard` 300/min → first 429 at hit #301 incl. sanity request; recovery 200; webhook = secret-gated, NO IP limiter (documented design); ACTION_ON_COOLDOWN maps to 429 by design.
+- ITEM 3 concurrency VERIFIED LIVE: 8 concurrent march creates → 1 success + 7×409 MARCH_SLOTS_EXHAUSTED, stock 20→15 exactly once; 8 concurrent same-key creates → 1 march row / 1 unit deducted / 1 key claim / same march in all responses (IDEMPOTENT_REPLAY path); 6 concurrent arrival processors → exactly 1 battle row (march LOST vs neutral d12 — honest outcome); 3 concurrent garrison withdrawals → 1×200 + 2×409 MARCH_NOT_WITHDRAWABLE, garrison clean, stock restored once; SQL sweep: 0 negatives, 0 orphans, 0 duplicate idem claims, max 1 battle/march. Cross-actor races remain suite-proven (C1-C9, 926/926).
+- ORDER NOTE: world init (item 4) executed before concurrency because production PG had only 3 standalone capitals (no grid) and races need adjacent cells.
+- ITEM 4 world init VERIFIED LIVE: lazy ensureWorldGenerated on first world read → 3→1681 territories / 36 regions / 1 season; runs ×2 identical; 0 dup (x,y), 0 orphan capitals, 0 invalid owner refs; pre-existing capitals intact + region-backfilled.
+- ITEM 5 golden path VERIFIED LIVE (16/16): health v0.23.0-phase34, ready 200, real-HMAC auth + Secure/HttpOnly/SameSite cookie, SUPERADMIN principal, player state, army, map, player-territories, territory detail, march create, battle ATTACKER_WIN captured:true exactly-once (ownership flipped), battle detail, garrison deploy+view 3/900, clan create WLOPS + list, notifications unread=13. Typed 409s (march slots / collect cooldown) are correct engine behavior, resolved by completing the march lifecycle.
+- ITEM 6 performance VERIFIED LIVE: 50-conc avg 112.9ms p95 180.3 max 196.7 (0% err, wall 560ms); 100-conc avg 398.4ms p50 374.0 p95 748.1 max 841.0 (0% err, wall 1291ms); server RSS 259→289MB, PG RSS flat 29MB; 5 surfaces cycled, under the 300/min principal budget.
+- ITEM 7 backup VERIFIED LIVE: backup-postgres.sh (pg_dump -Fc 200,644B + sha256 + 350 TOC entries; retention ≥14d); pg_basebackup physical base OK (after one-time ALTER ROLE warlords REPLICATION via temporary peer rule + reload, rule removed); WAL archive on (archive_mode=on, 5 segments); restore-drill.sh: fresh dump → temp PG16 on :5433 → pg_restore → 15/15 PASS (58 tables, counts == prod, 0 FK violations, 0 unvalidated constraints, ledger present) → teardown. One benign version-skew: pg_dump v17 SET transaction_timeout ignored by PG16 target (no data impact).
+- ITEM 8 watchdog VERIFIED LIVE: 7 checks (pg/server-process/health/ready/disk/memory/restart-loop-10min-window) all OK exit 0; PG-down self-heal path exercised; pg_isready path fixed (client bundle) and restart detector time-windowed.
+- ITEM 9 secret scan VERIFIED LIVE: 8 log files × 7 secret patterns (bot token, JWT, webhook, admin, DB password, initData hash, session JWT) ALL hits=0; .next/standalone has no .env*; zero secret matches in artifact + git-tracked files.
+- ITEM 10 docs: docs/PRODUCTION-DEPLOYMENT.md += Phase 34.6 addendum (status snapshot, honest non-verifiables, operator crontab, incidents).
+- ITEM 11 git: committing supervisor flock guard + docs + this worklog only; evidence/scripts/credentials live outside the repo (/home/z/warlords-ops, /home/z/pgbackups).
+- TELEGRAM BOUNDARY (honest): inbound webhook delivery + Mini App inside Telegram NOT VERIFIED (sandbox ingress not publicly reachable); outbound Bot API live (getMe/setMyCommands); webhook endpoint secret-gate verified locally. PRODUCTION URL: NOT AVAILABLE. Token rotation via BotFather required after public launch (token was exposed in chat).
+
+Stage Summary:
+- FINAL STATUS: 🟡 APPLICATION PRODUCTION-READY + BACKUPS/RESTORE/WATCHDOG OPERATIONAL — all locally-verifiable production claims now have executed evidence; the only open items require a public HTTPS domain (Telegram webhook inbound, Mini App) and are honestly documented as NOT VERIFIED, not claimed.

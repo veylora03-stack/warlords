@@ -21,6 +21,17 @@ PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 STANDALONE="$PROJECT_DIR/.next/standalone/server.js"
 ENV_FILE="${WARLORDS_PROD_ENV:-/home/z/warlords-ops/warlords-prod.env}"
 
+# ── 0. Single-instance guard (flock) ────────────────────────────────────────
+# Running `bun run dev` twice used to produce a crash-looping duplicate
+# (EADDRINUSE every 2s, log noise, wasted CPU). The second starter now exits
+# cleanly instead of fighting over port 3000.
+mkdir -p /home/z/prod-logs
+exec 8>/home/z/prod-logs/supervisor.lock
+if ! flock -n 8; then
+  echo "[supervisor] another production supervisor already holds the lock — exiting"
+  exit 0
+fi
+
 # ── 0. Fallback: no production artifact or no deployment env → dev server ──
 if [ ! -f "$STANDALONE" ] || [ ! -f "$ENV_FILE" ]; then
   echo "[supervisor] production artifact/env not present — running dev server"
